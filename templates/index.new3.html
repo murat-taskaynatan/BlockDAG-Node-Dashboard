@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>Dashboard (/new3)</title>
+</head>
+<body>
+  <div class="container">
+    <div class="card">
+      <div class="title">Activity Total (mined / processed / sealed)</div>
+      <div class="charts">
+        <div class="chartbox"><canvas id="activityChart"></canvas></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Optional: POLL_INTERVAL if you use /config.js -->
+  <script src="/config.js" defer></script>
+  <!-- Chart.js + time adapter -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js" defer></script>
+  <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns" defer></script>
+  <!-- Controller -->
+  <script src="/static/js/new3_dashboard.js" defer></script>
+
+  <style>
+    .charts{display:grid;grid-template-columns:1fr;gap:12px}
+    .chartbox{height:300px;position:relative;overflow:hidden}
+    .chartbox>canvas{position:absolute;inset:0;width:100% !important;height:100% !important;display:block}
+  </style>
+</body>
+</html>

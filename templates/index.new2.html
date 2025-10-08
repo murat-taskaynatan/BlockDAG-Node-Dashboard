@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>Dashboard (/new2)</title>
+</head>
+<body>
+  <div class="container">
+    <div class="card">
+      <div class="title">Charts (History + Live)</div>
+      <div class="charts">
+        <div class="chartbox"><canvas id="heightChart"></canvas></div>
+        <div class="chartbox"><canvas id="peersChart"></canvas></div>
+        <div class="chartbox"><canvas id="latencyChart"></canvas></div>
+        <div class="chartbox"><canvas id="activityChart"></canvas></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Optional config: if you use /config.js to set POLL_INTERVAL -->
+  <script src="/config.js" defer></script>
+  <!-- Chart.js + time adapter -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js" defer></script>
+  <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns" defer></script>
+  <!-- Controller -->
+  <script src="/static/js/new2_dashboard.js" defer></script>
+
+  <style>
+    /* Ensure 2x2 grid and proper canvas sizing (keeps in main style spirit) */
+    .charts{display:grid;grid-template-columns:repeat(2,1fr);gap:12px}
+    .chartbox{height:240px;position:relative;overflow:hidden}
+    .chartbox>canvas{position:absolute;inset:0;width:100% !important;height:100% !important;display:block}
+  </style>
+</body>
+</html>

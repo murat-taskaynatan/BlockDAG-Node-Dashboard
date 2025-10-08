@@ -1,0 +1,633 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>BlockDAG Dashboard</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="https://blockdag.network/images/presskit/Symbol.svg">
+<style>
+  :root { --bg:#0b1020; --card:#121a33; --text:#e7eaf6; --muted:#9aa4c7; --ok:#25d366; --bad:#ff5370; }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);font-family:ui-sans-serif,system-ui,Segoe UI,Roboto,Helvetica,Arial}
+  .wrap{max-width:1200px;margin:24px auto;padding:0 16px}
+  .card{background:var(--card);border-radius:16px;box-shadow:0 4px 18px rgba(0,0,0,.25);padding:16px}
+  .title{font-weight:600;font-size:20px;margin-bottom:10px;display:flex;align-items:center;gap:10px}
+  .grid{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:16px}
+  .kvs{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:8px;margin-top:8px}
+  .kv{background:rgba(255,255,255,.04);border-radius:12px;padding:10px}
+  .kv .k{color:var(--muted);font-size:12px}
+  .kv .v{font-size:18px;margin-top:4px}
+  canvas{width:100%;height:260px;background:rgba(0,0,0,.12);border-radius:12px;padding:8px}
+  .chart-value-tag{position:absolute;top:8px;right:12px;font-size:12px;color:var(--muted);background:rgba(0,0,0,.45);padding:2px 8px;border-radius:999px;font-variant-numeric:tabular-nums;pointer-events:none;white-space:nowrap}
+  .pill{display:inline-block;border-radius:999px;padding:6px 14px;font-size:12px;background:rgba(255,255,255,.08);line-height:1;font-weight:600;transition:background .2s,color .2s}
+  .stack{display:grid;grid-template-columns:1fr;gap:16px}
+  .header{display:flex;align-items:center;gap:10px;justify-content:space-between;margin-bottom:16px;padding:0 8px;}
+  .header img{border-radius:6px;height:36px;width:36px}
+/* node-controls-toolbar */
+.node-ctrls{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin-top:12px;align-items:end}
+.node-ctrls .btn{padding:.4rem .6rem;border:1px solid #3a4a7a;border-radius:.6rem;background:transparent;color:inherit;cursor:pointer}
+.node-ctrls .btn:disabled{opacity:.5;cursor:not-allowed}
+.node-ctrls select{background:transparent;border:1px solid #3a4a7a;border-radius:.6rem;padding:.35rem .5rem;color:inherit}
+.node-ctrls .sp{opacity:.7;margin:0 .2rem;grid-column:1/-1}
+.node-ctrls label{display:flex;flex-direction:column;gap:4px;font-size:11px;text-transform:uppercase;letter-spacing:.06em}
+.node-ctrls label span{opacity:.7}
+.node-ctrls input,.node-ctrls select{background:transparent;border:1px solid #3a4a7a;border-radius:.6rem;padding:.35rem .6rem;color:inherit}
+.node-ctrls select{width:100%;appearance:none;background-image:linear-gradient(45deg,transparent 50%,currentColor 50%),linear-gradient(135deg,currentColor 50%,transparent 50%);background-position:calc(100% - 18px) calc(50% - 3px),calc(100% - 12px) calc(50% - 3px);background-size:6px 6px;background-repeat:no-repeat;padding-right:1.8rem}
+#ctlStatus{min-width:120px;display:inline-block;opacity:1}
+  .activity-head{display:flex;flex-wrap:wrap;gap:16px;align-items:flex-start;margin-bottom:8px}
+  .activity-head-col{flex:1 1 320px}
+  .activity-head-col--controls{flex:1 1 280px}
+  .activity-head .title{margin-bottom:0}
+  .activity-body{display:flex;flex-wrap:wrap;gap:16px;align-items:flex-start;margin-top:0}
+.activity-kvs{flex:1 1 320px;display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:8px}
+.activity-controls{flex:1 1 280px}
+.activity-controls .node-ctrls{margin-top:0}
+</style>
+
+<div class="wrap">
+  <!-- Header -->
+  <div class="header">
+    <div style="display:flex;align-items:center;gap:10px">
+      <img src="https://blockdag.network/images/presskit/Symbol.svg" alt="BlockDAG Logo">
+      <h1 style="margin:0;font-size:22px;">BlockDAG Node Dashboard</h1>
+    </div>
+    <span id="healthLine" class="pill">Loading…</span>
+  </div>
+
+  <div class="stack">
+    <!-- Node Stats -->
+    <div class="card">
+      <div class="title">Node Stats</div>
+      <div class="kvs">
+        <div class="kv"><div class="k">height</div><div class="v" id="vHeight">—</div></div>
+        <div class="kv"><div class="k">peers</div><div class="v" id="vPeers">—</div></div>
+        <div class="kv"><div class="k">rpc latency (ms)</div><div class="v" id="vLat">—</div></div>
+        <div class="kv"><div class="k">status</div><div class="v" id="vStatus">—</div></div>
+        <div class="kv"><div class="k">last seen</div><div class="v" id="vLast">—</div></div>
+        <div class="kv"><div class="k">uptime</div><div class="v" id="vUptime">—</div></div>
+      </div>
+    </div>
+
+    <!-- Activity Totals -->
+    <div class="card">
+      <div class="activity-head">
+        <div class="activity-head-col">
+          <div class="title">Activity Totals</div>
+        </div>
+        <div class="activity-head-col activity-head-col--controls">
+          <div class="title">Chart Controls</div>
+        </div>
+      </div>
+      <div class="activity-body">
+        <div class="kvs activity-kvs">
+          <div class="kv"><div class="k">mined (blk/s)</div><div class="v" id="vMined">—</div></div>
+          <div class="kv"><div class="k">processed (blk/s)</div><div class="v" id="vProcessed">—</div></div>
+          <div class="kv"><div class="k">sealed (blk/s)</div><div class="v" id="vSealed">—</div></div>
+        </div>
+        <div class="activity-controls">
+          <div class="node-ctrls" id="chartControls">
+            <label>
+              <span>Window (min)</span>
+              <select id="chartWindowMinutes">
+                <option value="1">1 min</option>
+                <option value="5">5 min</option>
+                <option value="10">10 min</option>
+                <option value="20" selected>20 min</option>
+                <option value="30">30 min</option>
+                <option value="60">60 min</option>
+              </select>
+            </label>
+            <label>
+              <span>History Points</span>
+              <select id="chartHistoryPoints">
+                <option value="60">60 pts</option>
+                <option value="120">120 pts</option>
+                <option value="240" selected>240 pts</option>
+                <option value="360">360 pts</option>
+                <option value="480">480 pts</option>
+              </select>
+            </label>
+            <button class="btn" id="btnApplyChartSettings">Apply</button>
+            <span class="sp" id="ctlStatus"></span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Charts -->
+    <div class="card">
+      <div class="grid">
+        <div><canvas id="blockActivityChart"></canvas></div>
+        <div><canvas id="peersChart"></canvas></div>
+        <div><canvas id="latencyChart"></canvas></div>
+        <div><canvas id="activityChart"></canvas></div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- Chart.js -->
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js">
+
+    <!-- charts singleton wrapper -->
+    <script>
+    (function(){
+      if (window.__ChartSingletonPatched) return;
+      window.__ChartSingletonPatched = true;
+
+      const _Chart = window.Chart;
+      if (!_Chart) { console.warn("[charts] Chart.js not loaded yet; singleton wrapper will noop."); return; }
+
+      const orig = _Chart.prototype.constructor;
+      _Chart.prototype.constructor = function(ctx, cfg){
+        try {
+          const id = ctx && ctx.canvas && (ctx.canvas.id || ctx.canvas.getAttribute("id")) || null;
+          if (id) {
+            const store = (window.__charts = window.__charts || {});
+            if (store[id]) {
+              // reuse existing instance instead of recreating
+              return store[id];
+            }
+            const inst = orig.apply(this, arguments);
+            store[id] = inst;
+            inst.__id = id;
+            return inst;
+          }
+        } catch(e) {}
+        return orig.apply(this, arguments);
+      };
+    })();
+    </script>
+  
+</script>
+<script>
+const mkLine = (ctx, label, data, labels) => {
+  if (!window.Chart) return null;
+  const chart = new Chart(ctx, {
+    type: 'line',
+    data: { labels, datasets: [{ label, data, fill:false, tension:0.25, pointRadius:0, borderWidth:2 }] },
+    options: {
+      animation:false, responsive:true, maintainAspectRatio:false,
+      scales:{ x:{ ticks:{display:false}}, y:{ beginAtZero:true } },
+      plugins:{ legend:{ display:true } }
+    }
+  });
+  chart._valueTag = null;
+  return chart;
+};
+
+let charts = {};
+const chartModes = { blockActivity: 'absolute', peers: 'delta' };
+const baseChartLabels = { blockActivity: 'Block Activity', peers: 'Peers', latency: 'RPC Latency (ms)' };
+
+function hexToRgba(hex, alpha){
+  const match = /^#?([0-9a-f]{6})$/i.exec(hex || '');
+  if (!match) return null;
+  const value = parseInt(match[1], 16);
+  const r = (value >> 16) & 255;
+  const g = (value >> 8) & 255;
+  const b = value & 255;
+  const a = (typeof alpha === 'number' && !Number.isNaN(alpha)) ? alpha : 1;
+  return `rgba(${r},${g},${b},${a})`;
+}
+
+function applyPillStyle(el, hexColor, alpha=0.25){
+  if (!el) return;
+  const bg = hexToRgba(hexColor, alpha);
+  el.style.background = bg || 'rgba(255,255,255,.12)';
+  el.style.color = hexColor || '#e7eaf6';
+}
+
+function extractRate(raw){
+  if (raw == null) return 0;
+  if (typeof raw === 'number') return Number.isFinite(raw) ? raw : 0;
+  if (typeof raw === 'object'){
+    const candidates = [raw.rate_per_s, raw.per_s_10s, raw.per_s_60s, raw.rate, raw.value];
+    for (const val of candidates){
+      const num = Number(val);
+      if (Number.isFinite(num)) return num;
+    }
+  }
+  const num = Number(raw);
+  return Number.isFinite(num) ? num : 0;
+}
+
+function formatDuration(seconds){
+  const s = Number(seconds);
+  if (!Number.isFinite(s) || s < 0) return '—';
+  if (s < 60) return `${Math.round(s)}s`;
+  if (s < 3600){
+    const minutes = Math.floor(s / 60);
+    const remSeconds = Math.round(s % 60);
+    return `${minutes}m ${remSeconds}s`;
+  }
+  const hours = Math.floor(s / 3600);
+  const minutes = Math.floor((s % 3600) / 60);
+  const days = Math.floor(hours / 24);
+  const remHours = hours % 24;
+  if (days > 0) return `${days}d ${remHours}h`;
+  return `${hours}h ${minutes}m`;
+}
+
+function normalizeSeries(raw){
+  if (!Array.isArray(raw)) return [];
+  return raw.map(v => Number(v));
+}
+
+function transformForMode(key, raw){
+  const data = normalizeSeries(raw);
+  if (!data.length) return data;
+  if (chartModes[key] !== 'delta') return data;
+  const baseline = data[0];
+  const deltas = data.map(v => v - baseline);
+  const hasVariance = deltas.some(v => Math.abs(v) > 1e-9);
+  return hasVariance ? deltas : data;
+}
+
+function labelFor(key){
+  const base = baseChartLabels[key] || 'Series';
+  return chartModes[key] === 'delta' ? `${base} Δ` : base;
+}
+
+function updateLineChart(key, labels, rawData){
+  const canvasMap = { blockActivity:'blockActivityChart', peers:'peersChart', latency:'latencyChart' };
+  const canvasId = canvasMap[key];
+  if (!canvasId) return;
+  const datasetLabel = labelFor(key);
+  const data = transformForMode(key, rawData);
+  if (!charts[key]){
+    const canvas = document.getElementById(canvasId);
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    charts[key] = mkLine(ctx, datasetLabel, data, labels);
+  }else{
+    const chart = charts[key];
+    chart.data.labels = labels;
+    chart.data.datasets[0].data = data;
+    chart.data.datasets[0].label = datasetLabel;
+    chart.update('none');
+  }
+  renderChartValue(key, data, datasetLabel);
+}
+
+function ensureChartTag(chart, label){
+  if (!chart) return null;
+  if (chart._valueTag && chart._valueTag.isConnected) return chart._valueTag;
+  const canvas = chart.canvas;
+  if (!canvas || !canvas.parentElement) return null;
+  const wrapper = canvas.parentElement;
+  const style = window.getComputedStyle(wrapper);
+  if (style.position === 'static'){ wrapper.style.position = 'relative'; }
+  const tag = document.createElement('div');
+  tag.className = 'chart-value-tag';
+  if (label){
+    tag.dataset.series = label;
+    tag.title = label;
+  }
+  wrapper.appendChild(tag);
+  chart._valueTag = tag;
+  return tag;
+}
+
+function formatValueDisplay(val){
+  if (val == null) return '—';
+  if (!Number.isFinite(val)) return '—';
+  const abs = Math.abs(val);
+  if (abs >= 1000){
+    const units = ['','K','M','B','T'];
+    let unitIdx = 0;
+    let scaled = val;
+    while (unitIdx < units.length-1 && Math.abs(scaled) >= 1000){
+      scaled /= 1000;
+      unitIdx++;
+    }
+    return `${scaled.toFixed(scaled >= 100 ? 0 : scaled >= 10 ? 1 : 2).replace(/\.?0+$/,'')}${units[unitIdx]}`;
+  }
+  return val.toFixed(abs >= 100 ? 0 : abs >= 10 ? 1 : 2).replace(/\.?0+$/,'');
+}
+
+function renderChartValue(key, data, label){
+  const chart = charts[key];
+  if (!chart) return;
+  const tag = ensureChartTag(chart, label);
+  if (!tag) return;
+  const latest = data.length ? data[data.length-1] : null;
+  tag.textContent = formatValueDisplay(latest);
+}
+
+function renderActivityValue(minedSeries, processedSeries, sealedSeries){
+  const chart = charts.activity;
+  if (!chart) return;
+  const tag = ensureChartTag(chart, 'Activity');
+  if (!tag) return;
+  const pickLatest = arr => (Array.isArray(arr) && arr.length) ? arr[arr.length-1] : null;
+  const minedLatest = pickLatest(minedSeries);
+  const processedLatest = pickLatest(processedSeries);
+  const sealedLatest = pickLatest(sealedSeries);
+  tag.textContent = `M ${formatValueDisplay(minedLatest)} · P ${formatValueDisplay(processedLatest)} · S ${formatValueDisplay(sealedLatest)}`;
+}
+
+function computeActivityTotals(labels, minedSeries, processedSeries, sealedSeries){
+  if (!Array.isArray(labels) || !labels.length) return null;
+  const len = labels.length;
+  const totals = [];
+  for (let i = 0; i < len; i++){
+    const mined = Number((minedSeries || [])[i] ?? 0);
+    const processed = Number((processedSeries || [])[i] ?? 0);
+    const sealed = Number((sealedSeries || [])[i] ?? 0);
+    totals.push(mined + processed + sealed);
+  }
+  return { labels, data: totals };
+}
+
+function fmtTime(ms){
+  const d = new Date(ms);
+  return d.toLocaleString();
+}
+
+async function refreshStatus(){
+  try{
+    const r = await fetch('/api/status', {cache:'no-store'});
+    const j = await r.json();
+    const pill = document.getElementById('healthLine');
+    if (pill){
+      const ns = j.node_state || {};
+      const base = ns.label || (j.status || j.health || 'Unknown');
+      const detailText = ns.detail || ((j.health_text && j.health_text !== 'ok') ? j.health_text : '');
+      pill.textContent = detailText ? `${base} · ${detailText}` : base;
+      pill.title = pill.textContent;
+      const color = ns.color || (j.ok ? '#25d366' : '#ff5370');
+      applyPillStyle(pill, color, 0.2);
+      if (pill.dataset){ pill.dataset.state = ns.code || ''; }
+    }
+    document.getElementById('vHeight').textContent = j.height;
+    document.getElementById('vPeers').textContent  = j.peers;
+    document.getElementById('vLat').textContent    = j.rpc_latency_ms;
+    document.getElementById('vStatus').textContent = (j.node_state && j.node_state.label) || j.status;
+    const lastSeenEl = document.getElementById('vLast');
+    if (lastSeenEl){
+      const ts = Number(j.last_seen_ts);
+      lastSeenEl.textContent = Number.isFinite(ts) ? fmtTime(ts) : '—';
+    }
+    const actSrc = (j.node_state && j.node_state.activity) || j.activity || {};
+    const mined = extractRate(actSrc.mined);
+    const processed = extractRate(actSrc.processed);
+    const sealed = extractRate(actSrc.sealed);
+    document.getElementById('vMined').textContent     = mined.toFixed(2);
+    document.getElementById('vProcessed').textContent = processed.toFixed(2);
+    document.getElementById('vSealed').textContent    = sealed.toFixed(2);
+    const uptimeEl = document.getElementById('vUptime');
+    if (uptimeEl){
+      const uptime = Number(j.node_state?.uptime_sec ?? j.uptime_sec ?? j.uptime ?? 0);
+      uptimeEl.textContent = Number.isFinite(uptime) ? formatDuration(uptime) : '—';
+    }
+  }catch(e){
+    const pill = document.getElementById('healthLine');
+    if (pill){
+      pill.textContent = 'Unavailable';
+      pill.title = 'Status fetch failed';
+      applyPillStyle(pill, '#ff5370');
+      if (pill.dataset){ pill.dataset.state = 'unreachable'; }
+    }
+    const lastSeenEl = document.getElementById('vLast');
+    if (lastSeenEl){ lastSeenEl.textContent = '—'; }
+    const uptimeEl = document.getElementById('vUptime');
+    if (uptimeEl){ uptimeEl.textContent = '—'; }
+  }
+}
+
+async function refreshCharts(){
+  if (!window.Chart) return;
+  const fetchJSON = u => fetch(u).then(r=>r.json()).catch(()=>null);
+  const [p,l,a] = await Promise.all([
+    fetchJSON('/api/chart/peers'),
+    fetchJSON('/api/chart/latency'),
+    fetchJSON('/api/chart/activity'),
+  ]);
+
+  if (p){
+    updateLineChart('peers', p.labels || [], p.data || []);
+  }
+  if (l){
+    updateLineChart('latency', l.labels || [], l.data || []);
+  }
+  if (a){
+    const ctx = document.getElementById('activityChart').getContext('2d');
+    if (!charts.activity){
+      charts.activity ||= new Chart(ctx, {
+        type:'line',
+        data:{
+          labels: a.labels,
+          datasets:[
+            { label:'Mined', data:a.mined, fill:false, tension:0.25, pointRadius:0, borderWidth:2 },
+            { label:'Processed', data:a.processed, fill:false, tension:0.25, pointRadius:0, borderWidth:2 },
+            { label:'Sealed', data:a.sealed, fill:false, tension:0.25, pointRadius:0, borderWidth:2 },
+          ]
+        },
+        options:{
+          animation:false, responsive:true, maintainAspectRatio:false,
+          scales:{ x:{ ticks:{display:false}}, y:{ beginAtZero:true }},
+          plugins:{ legend:{ display:true } }
+        }
+      });
+      charts.activity._valueTag = null;
+    }else{
+      charts.activity.data.labels = a.labels;
+      charts.activity.data.datasets[0].data = a.mined;
+      charts.activity.data.datasets[1].data = a.processed;
+      charts.activity.data.datasets[2].data = a.sealed;
+      charts.activity.update('none');
+    }
+    const totals = computeActivityTotals(a.labels, a.mined, a.processed, a.sealed);
+    if (totals){
+      updateLineChart('blockActivity', totals.labels, totals.data);
+    }
+    renderActivityValue(a.mined, a.processed, a.sealed);
+  }else{
+    updateLineChart('blockActivity', [], []);
+  }
+}
+
+async function tick(){ await refreshStatus(); await refreshCharts(); }
+async function preloadHistory(){
+  if (!window.Chart) return;
+  try{
+    const res = await fetch('/api/history', { cache:'no-store' });
+    if (!res.ok) throw new Error(res.status || 'history response not ok');
+    const hist = await res.json();
+    const labelsFor = key => (hist[key]?.labels) || [];
+    const seriesFor = key => (hist[key]?.series) || [];
+    const primeLine = key => {
+      const labels = labelsFor(key);
+      const data = seriesFor(key);
+      if (!labels.length) return;
+      updateLineChart(key, labels, data);
+    };
+    primeLine('peers');
+    primeLine('latency');
+
+    const blockLabels = labelsFor('activity');
+    const blockTotals = seriesFor('activity');
+    if (blockLabels.length){
+      updateLineChart('blockActivity', blockLabels, blockTotals);
+    }
+
+    const actLabels = labelsFor('activity');
+    if (actLabels.length){
+      const minedSeries = seriesFor('mined');
+      const processedSeries = seriesFor('processed');
+      const sealedSeries = seriesFor('sealed');
+      const ctx = document.getElementById('activityChart')?.getContext('2d');
+      if (ctx){
+        if (!charts.activity){
+          charts.activity = new Chart(ctx, {
+            type:'line',
+            data:{
+              labels: actLabels,
+              datasets:[
+                { label:'Mined', data:minedSeries, fill:false, tension:0.25, pointRadius:0, borderWidth:2 },
+                { label:'Processed', data:processedSeries, fill:false, tension:0.25, pointRadius:0, borderWidth:2 },
+                { label:'Sealed', data:sealedSeries, fill:false, tension:0.25, pointRadius:0, borderWidth:2 },
+              ]
+            },
+            options:{
+              animation:false, responsive:true, maintainAspectRatio:false,
+              scales:{ x:{ ticks:{display:false}}, y:{ beginAtZero:true }},
+              plugins:{ legend:{ display:true } }
+            }
+          });
+          charts.activity._valueTag = null;
+        }else{
+          charts.activity.data.labels = actLabels;
+          charts.activity.data.datasets[0].data = minedSeries;
+          charts.activity.data.datasets[1].data = processedSeries;
+          charts.activity.data.datasets[2].data = sealedSeries;
+          charts.activity.update('none');
+        }
+        renderActivityValue(minedSeries, processedSeries, sealedSeries);
+      }
+    }
+  }catch(err){
+    console.warn('[history] preload failed:', err);
+  }
+}
+
+function setCtlStatus(msg, ok=true){
+  const el = document.getElementById('ctlStatus');
+  if (!el) return;
+  el.textContent = msg || '';
+  el.style.color = ok ? '#25d366' : '#ff5370';
+  if (setCtlStatus._timer) clearTimeout(setCtlStatus._timer);
+  if (msg){
+    setCtlStatus._timer = setTimeout(()=>{ el.textContent = ''; }, 4000);
+  }
+}
+
+function syncSelectValue(select, value, labelFmt){
+  if (!select || value === undefined || value === null) return;
+  const str = String(value);
+  const hasOption = Array.from(select.options || []).some(opt => opt.value === str);
+  if (!hasOption){
+    const opt = document.createElement('option');
+    opt.value = str;
+    opt.textContent = labelFmt ? labelFmt(value) : str;
+    opt.dataset.dynamic = '1';
+    select.appendChild(opt);
+  }
+  select.value = str;
+}
+
+async function loadChartConfig(){
+  try{
+    const [cfgRes, statusRes] = await Promise.all([
+      fetch('/api/chart/config', { cache:'no-store' }),
+      fetch('/api/status', { cache:'no-store' })
+    ]);
+    if (!cfgRes.ok) throw new Error('config ' + cfgRes.status);
+    if (!statusRes.ok) throw new Error('status ' + statusRes.status);
+    const cfg = await cfgRes.json();
+    const status = await statusRes.json();
+    const histInput = document.getElementById('chartHistoryPoints');
+    if (histInput && Number.isFinite(cfg.history_len)){
+      syncSelectValue(histInput, Math.round(cfg.history_len), v => `${v} pts`);
+    }
+    const minutesInput = document.getElementById('chartWindowMinutes');
+    if (minutesInput && Number.isFinite(status.sample_sec) && Number.isFinite(status.window_points)){
+      const minutes = Math.max(1, Math.round((status.window_points * status.sample_sec)/60));
+      syncSelectValue(minutesInput, minutes, v => `${v} min`);
+    }
+  }catch(err){
+    setCtlStatus('Failed to load config', false);
+  }
+}
+
+async function applyWindow(minutes){
+  const value = Number(minutes);
+  if (!Number.isFinite(value) || value < 1){
+    setCtlStatus('Enter minutes ≥ 1', false);
+    return null;
+  }
+  const minutesInt = Math.round(value);
+  const res = await fetch('/api/control', {
+    method:'POST',
+    headers:{'content-type':'application/json'},
+    body: JSON.stringify({ action:'set_window', minutes: minutesInt })
+  });
+  const data = await res.json();
+  if (!res.ok || !data.ok) throw new Error(data.error || 'set_window failed');
+  setCtlStatus(`Window set (${data.minutes || minutesInt} min)`);
+  return data;
+}
+
+async function applyHistory(points){
+  const value = Number(points);
+  if (!Number.isFinite(value) || value < 12){
+    setCtlStatus('History ≥ 12', false);
+    return null;
+  }
+  const pointsInt = Math.round(value);
+  const res = await fetch('/api/chart/config', {
+    method:'POST',
+    headers:{'content-type':'application/json'},
+    body: JSON.stringify({ history_len: pointsInt })
+  });
+  const data = await res.json();
+  if (!res.ok || !data.ok) throw new Error(data.error || 'set history failed');
+  setCtlStatus(`History set (${data.history_len || pointsInt})`);
+  return data;
+}
+
+async function applyChartSettings(){
+  const input = document.getElementById('chartWindowMinutes');
+  const histSelect = document.getElementById('chartHistoryPoints');
+  if (!input || !histSelect) return;
+  try {
+    const minutesVal = input.value;
+    const historyVal = histSelect.value;
+    await applyWindow(minutesVal);
+    await applyHistory(historyVal);
+    await preloadHistory();
+    await refreshCharts();
+    await loadChartConfig();
+  } catch(err) {
+    setCtlStatus(err.message || 'Apply failed', false);
+  }
+}
+
+function wireControls(){
+  const applyBtn = document.getElementById('btnApplyChartSettings');
+  if (applyBtn){
+    applyBtn.addEventListener('click', ev => { ev.preventDefault(); applyChartSettings(); });
+  }
+}
+
+const pollMs = Number(window.POLL_INTERVAL || 2000) || 2000;
+(async () => {
+  wireControls();
+  await loadChartConfig();
+  await preloadHistory();
+  await tick();
+  setInterval(tick, pollMs);
+})();
+</script>
+<script>window.POLL_INTERVAL = {{ poll_interval_ms | safe }};</script>
+<script src="/config.js"></script>
