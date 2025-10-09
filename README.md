@@ -5,7 +5,7 @@ A Flask-based monitoring dashboard for BlockDAG nodes. The UI surfaces node heal
 
 
 
- - All-new chart suite (height, peers, latency, activity) replaces the static view—live value badges, remote vs local height
+ -  Chart suite (height, peers, latency, activity) replaces the static view—live value badges, remote vs local height
     overlays, and buffered history preloads deliver at-a-glance trend insight unavailable in the previous Git build.
   - Added remote RPC height awareness: dashboard now pulls configurable remote heights, shows local vs remote deltas in a
     dedicated chart, and estimates ETA to full sync based on recent catch-up speed.
