@@ -1,4 +1,5 @@
 import os, time, json, threading, shutil, subprocess, math
+from datetime import datetime, timezone
 from collections import deque
 from flask import Flask, jsonify, render_template, request
 
@@ -13,6 +14,14 @@ CHART_CONFIG={'timeframe_sec':60,'history_len':240}
 RPC_BASE = os.getenv("BDAG_RPC_BASE", "http://127.0.0.1:18545")
 RPC_USER = os.getenv("BDAG_RPC_USER", "")
 RPC_PASS = os.getenv("BDAG_RPC_PASS", "")
+REMOTE_RPC_BASE = os.getenv("BDAG_REMOTE_RPC_BASE", "https://rpc.awakening.bdagscan.com").strip()
+REMOTE_RPC_METHOD = os.getenv("BDAG_REMOTE_RPC_METHOD", "eth_blockNumber").strip() or "eth_blockNumber"
+REMOTE_RPC_TIMEOUT = float(os.getenv("BDAG_REMOTE_RPC_TIMEOUT", "2.5"))
+REMOTE_RPC_CACHE_SEC = float(os.getenv("BDAG_REMOTE_RPC_CACHE_SEC", "10"))
+REMOTE_RPC_VERIFY = os.getenv("BDAG_REMOTE_RPC_VERIFY", "0") == "1"
+MINING_STATE_SYNC_CONTAINER = os.getenv("BDAG_NODE_CONTAINER", "blockdag-testnet-network").strip()
+MINING_STATE_SYNC_CACHE_SEC = float(os.getenv("BDAG_MINING_STATE_SYNC_CACHE_SEC", "10"))
+DOCKER_BIN = shutil.which("docker") or ("/usr/bin/docker" if os.path.exists("/usr/bin/docker") else None)
 SAMPLE_SEC = int(os.getenv("BDAG_SAMPLE_SEC", "5"))
 WINDOW = int(os.getenv("BDAG_WINDOW", "240"))  # points kept in memory
 ENABLE_CONTROL = os.getenv("DASH_ENABLE_CONTROL", "1") == "1"
@@ -24,6 +33,7 @@ MINING_RATE_THRESHOLD = float(os.getenv("DASH_MINING_RATE_THRESHOLD", "0.1"))
 
 # ----- Series -----
 height_series = deque(maxlen=WINDOW)
+remote_height_series = deque(maxlen=WINDOW)
 peers_series  = deque(maxlen=WINDOW)
 lat_series    = deque(maxlen=WINDOW)
 
@@ -38,6 +48,8 @@ HISTORY_POINTS = int(os.getenv("BDAG_HISTORY_POINTS", "720"))
 history_lock = threading.Lock()
 # height history intentionally omitted to keep height chart live-only
 _history_series = {
+    "height_local": deque(maxlen=HISTORY_POINTS),
+    "height_remote": deque(maxlen=HISTORY_POINTS),
     "peers": deque(maxlen=HISTORY_POINTS),
     "latency": deque(maxlen=HISTORY_POINTS),
     "mined": deque(maxlen=HISTORY_POINTS),
@@ -59,7 +71,7 @@ def _finite(val, default=0.0):
     return v
 
 
-def _history_push(ts_ms, height, peers, latency, mined, processed, sealed, activity):
+def _history_push(ts_ms, height, peers, latency, mined, processed, sealed, activity, remote_height=None):
     try:
         h_val = float(height or 0)
     except Exception:
@@ -85,6 +97,12 @@ def _history_push(ts_ms, height, peers, latency, mined, processed, sealed, activ
     except Exception:
         sealed_val = 0.0
     activity_val = max(float(activity or 0), 0.0)
+    remote_val = None
+    if remote_height is not None:
+        try:
+            remote_val = float(remote_height)
+        except Exception:
+            remote_val = None
 
     with history_lock:
         last_ts = _history_state.get("last_ts")
@@ -96,6 +114,8 @@ def _history_push(ts_ms, height, peers, latency, mined, processed, sealed, activ
                 dx = max((h_val - last_height) / dt, 0.0)
         _history_state["last_ts"] = ts_ms
         _history_state["last_height"] = h_val
+        _history_series["height_local"].append((ts_ms, h_val))
+        _history_series["height_remote"].append((ts_ms, remote_val))
         _history_series["peers"].append((ts_ms, p_val))
         _history_series["latency"].append((ts_ms, l_val))
         _history_series["mined"].append((ts_ms, mined_val))
@@ -146,6 +166,8 @@ def _history_pack(key):
 def _history_payload():
     with history_lock:
         return {
+            "height_local": _history_pack("height_local"),
+            "height_remote": _history_pack("height_remote"),
             "peers": _history_pack("peers"),
             "latency": _history_pack("latency"),
             "activity": _history_pack("activity"),
@@ -191,6 +213,144 @@ def try_methods(names):
 
 def get_block_height():
     return try_methods(["dag_blockNumber","bdag_blockNumber","eth_blockNumber","getblockcount"])
+
+
+_REMOTE_HEIGHT_CACHE = {"ts": 0.0, "height": None, "error": None}
+_MINING_STATE_SYNC_CACHE = {"ts": 0.0, "value": None, "error": None}
+_NODE_UPTIME_CACHE = {"start_ts": None, "checked": 0.0}
+
+
+def _parse_iso_timestamp(value):
+    s = (value or "").strip()
+    if not s:
+        return None
+    try:
+        iso = s[:-1] + "+00:00" if s.endswith("Z") else s
+        return datetime.fromisoformat(iso).timestamp()
+    except Exception:
+        pass
+    if s.endswith("Z"):
+        s = s[:-1]
+    if "." in s:
+        base, frac = s.split(".", 1)
+        digits = "".join(ch for ch in frac if ch.isdigit())
+        digits = (digits + "000000")[:6]
+        s = f"{base}.{digits}"
+    for fmt in ("%Y-%m-%dT%H:%M:%S.%f", "%Y-%m-%dT%H:%M:%S"):
+        try:
+            dt = datetime.strptime(s, fmt).replace(tzinfo=timezone.utc)
+            return dt.timestamp()
+        except ValueError:
+            continue
+    return None
+
+
+def _resolve_node_start_ts():
+    container = (os.getenv("BDAG_NODE_CONTAINER", "") or "").strip() or MINING_STATE_SYNC_CONTAINER
+    docker_cmd = DOCKER_BIN
+    if not container or not docker_cmd:
+        return None
+    try:
+        out = subprocess.check_output(
+            [docker_cmd, "inspect", "-f", "{{.State.StartedAt}}", container],
+            text=True,
+            timeout=2,
+        ).strip()
+        return _parse_iso_timestamp(out)
+    except Exception:
+        return None
+
+
+def get_node_uptime_sec(force: bool = False):
+    cache = _NODE_UPTIME_CACHE
+    now = time.time()
+    start_ts = cache.get("start_ts")
+    last_checked = cache.get("checked", 0.0)
+    if force or start_ts is None or (now - last_checked) > 15:
+        start_ts = _resolve_node_start_ts()
+        cache["start_ts"] = start_ts
+        cache["checked"] = now
+    if start_ts is None:
+        return None
+    return max(int(now - start_ts), 0)
+
+
+def get_remote_height(force: bool = False):
+    base = REMOTE_RPC_BASE
+    if not base:
+        return None
+    now = time.time()
+    cache = _REMOTE_HEIGHT_CACHE
+    if not force and (now - cache.get("ts", 0.0)) < max(1.0, REMOTE_RPC_CACHE_SEC):
+        return cache.get("height")
+    payload = {"jsonrpc": "2.0", "id": 1, "method": REMOTE_RPC_METHOD or "eth_blockNumber", "params": []}
+    try:
+        resp = requests.post(
+            base,
+            json=payload,
+            timeout=REMOTE_RPC_TIMEOUT,
+            verify=REMOTE_RPC_VERIFY,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        result = data.get("result")
+        height = None
+        if isinstance(result, str) and result.startswith("0x"):
+            height = int(result, 16)
+        elif result is not None:
+            height = int(result)
+        cache["height"] = height
+        cache["ts"] = now
+        cache["error"] = None
+        return height
+    except Exception as exc:
+        cache["ts"] = now
+        cache["error"] = str(exc)
+        return cache.get("height")
+
+
+def _mining_state_sync_from_compose():
+    compose_path = os.getenv("BDAG_COMPOSE_PATH", "/home/blockdag/blockdag-scripts/docker-compose.yml")
+    try:
+        with open(compose_path, "r", encoding="utf-8") as f:
+            contents = f.read()
+        return "--miningstatesync" in contents
+    except Exception:
+        return None
+
+
+def is_mining_state_sync_enabled(force: bool = False):
+    container = MINING_STATE_SYNC_CONTAINER
+    docker_cmd = DOCKER_BIN
+    if not container or not docker_cmd:
+        return _mining_state_sync_from_compose()
+    now = time.time()
+    cache = _MINING_STATE_SYNC_CACHE
+    if not force and (now - cache.get("ts", 0.0)) < max(1.0, MINING_STATE_SYNC_CACHE_SEC):
+        return cache.get("value")
+    try:
+        out = subprocess.check_output(
+            [docker_cmd, "inspect", "-f", "{{json .Config.Env}}", container],
+            text=True,
+            timeout=2,
+        )
+        env_list = json.loads(out)
+        mining_enabled = None
+        for env_entry in env_list or []:
+            if isinstance(env_entry, str) and env_entry.startswith("NODE_ARGS="):
+                mining_enabled = "--miningstatesync" in env_entry
+                break
+        cache["value"] = mining_enabled
+        cache["ts"] = now
+        cache["error"] = None
+        return mining_enabled
+    except Exception as exc:
+        cache["ts"] = now
+        cache["error"] = str(exc)
+        fallback = _mining_state_sync_from_compose()
+        cache["value"] = fallback if fallback is not None else cache.get("value")
+        return cache.get("value") if cache.get("value") is not None else fallback
+
 
 def get_peer_count():
     # Prefer ETH-style 2.0 peers, then fallback to Bitcoin 1.0 getconnectioncount
@@ -252,7 +412,7 @@ def _update_node_state(sample: dict):
         payload["height"] = height
         payload["peers"] = peers
         payload["latency_ms"] = int(max(_finite(sample.get("rpc_latency_ms"), 0.0), 0.0))
-        payload["uptime_sec"] = int(max(time.time() - APP_START, 0))
+        payload["uptime_sec"] = int(max(_finite(sample.get("node_uptime_sec"), 0.0), 0.0))
         payload["last_progress_ts"] = progress_ts
         payload["since_height_change_sec"] = int(max((now_ms - progress_ts) / 1000, 0))
         payload["ts_ms"] = now_ms
@@ -362,8 +522,16 @@ def sample_once():
     mined_val = max(_finite(mined_val, 0.0), 0.0)
     processed_val = max(_finite(processed_val, 0.0), 0.0)
     sealed_val = max(_finite(sealed_val, 0.0), 0.0)
+    remote_height_val = None
+    try:
+        remote_height_raw = get_remote_height()
+        if remote_height_raw is not None:
+            remote_height_val = int(max(_finite(remote_height_raw, 0.0), 0.0))
+    except Exception:
+        remote_height_val = None
     with lock:
         height_series.append((now_ms, safe_height))
+        remote_height_series.append((now_ms, remote_height_val if remote_height_val is not None else None))
         peers_series.append((now_ms, safe_peers))
         lat_series.append((now_ms, safe_latency))
         if mined_val or processed_val or sealed_val:
@@ -372,9 +540,16 @@ def sample_once():
             activity_processed.append(processed_val)
             activity_sealed.append(sealed_val)
     activity_total = max(_finite(mined_val + processed_val + sealed_val, 0.0), 0.0)
+    node_uptime_sec = 0
+    try:
+        node_uptime_val = get_node_uptime_sec()
+        if node_uptime_val is not None:
+            node_uptime_sec = int(max(_finite(node_uptime_val, 0.0), 0.0))
+    except Exception:
+        node_uptime_sec = 0
     try:
         _history_push(now_ms, safe_height, safe_peers, safe_latency,
-                      mined_val, processed_val, sealed_val, activity_total)
+                      mined_val, processed_val, sealed_val, activity_total, remote_height_val)
     except Exception:
         pass
     sample_meta = {
@@ -383,6 +558,7 @@ def sample_once():
         "height": safe_height,
         "peers": safe_peers,
         "rpc_latency_ms": safe_latency,
+        "height_remote": remote_height_val,
         "activity": {
             "mined": mined_val,
             "processed": processed_val,
@@ -390,13 +566,14 @@ def sample_once():
             "total": activity_total,
         },
         "ts_ms": now_ms,
+        "node_uptime_sec": node_uptime_sec,
     }
     globals()["_last_sample_meta"] = sample_meta
     try:
         _update_node_state(sample_meta)
     except Exception:
         pass
-    return ok, health_text, resolved_height, resolved_peers, rpc_latency_ms
+    return ok, health_text, resolved_height, resolved_peers, rpc_latency_ms, remote_height_val
 
 def ensure_activity_defaults():
     now_ms = int(time.time()*1000)
@@ -425,14 +602,41 @@ def _series_to_payload(series):
         data   = [v  for _,v  in series]
     return {"labels": labels, "data": data, "len": len(data), "last": (data[-1] if data else None)}
 
+
+def _average_height_rate(window_sec=300):
+    try:
+        window_sec = max(float(window_sec), 1.0)
+    except Exception:
+        window_sec = 300.0
+    window_ms = int(window_sec * 1000.0)
+    cutoff_ms = int(time.time() * 1000) - window_ms
+    with lock:
+        filtered = [item for item in height_series if item[0] >= cutoff_ms]
+    if len(filtered) < 2:
+        return None
+    start_ts, start_height = filtered[0]
+    end_ts, end_height = filtered[-1]
+    dt = (end_ts - start_ts) / 1000.0
+    if dt <= 0:
+        return None
+    try:
+        dh = float(end_height) - float(start_height)
+    except Exception:
+        return None
+    rate = dh / dt
+    if not math.isfinite(rate):
+        return None
+    return max(rate, 0.0)
+
 def _apply_window_points(points:int):
     """Adjust in-memory window length (number of points) for all series."""
     global WINDOW
-    global height_series, peers_series, lat_series
+    global height_series, remote_height_series, peers_series, lat_series
     global activity_labels, activity_mined, activity_processed, activity_sealed
     WINDOW = max(12, int(points))
     with lock:
         height_series = deque(list(height_series)[-WINDOW:], maxlen=WINDOW)
+        remote_height_series = deque(list(remote_height_series)[-WINDOW:], maxlen=WINDOW)
         peers_series = deque(list(peers_series)[-WINDOW:], maxlen=WINDOW)
         lat_series = deque(list(lat_series)[-WINDOW:], maxlen=WINDOW)
         activity_labels = deque(list(activity_labels)[-WINDOW:], maxlen=WINDOW)
@@ -457,27 +661,90 @@ def index():
 # ----- Status & charts -----
 @app.route("/api/status")
 def status():
-    ok, health_text, h, p, rpc_latency_ms = sample_once()
+    ok, health_text, h, p, rpc_latency_ms, remote_h = sample_once()
     node_state = _current_node_state()
+    local_height = int(h) if h is not None else 0
+    remote_height_val = None
+    if remote_h is not None:
+        try:
+            remote_height_val = int(remote_h)
+        except Exception:
+            remote_height_val = None
+    if remote_height_val is None:
+        remote_height = get_remote_height()
+        if remote_height is not None:
+            try:
+                remote_height_val = int(remote_height)
+            except Exception:
+                remote_height_val = None
+    mining_state_sync = is_mining_state_sync_enabled()
+    avg_height_rate_5m = None
+    try:
+        avg_height_rate_5m = _average_height_rate(300)
+    except Exception:
+        avg_height_rate_5m = None
+    eta_to_sync_sec = None
+    if remote_height_val is not None:
+        remaining = max(int(remote_height_val) - int(local_height), 0)
+        if remaining <= 0:
+            eta_to_sync_sec = 0
+        elif avg_height_rate_5m and avg_height_rate_5m > 0:
+            eta_to_sync_sec = int(max(remaining / avg_height_rate_5m, 0))
+    try:
+        node_uptime_sec = int(max(_finite(node_state.get("uptime_sec"), 0.0), 0.0))
+    except Exception:
+        node_uptime_sec = 0
+    if node_uptime_sec <= 0:
+        try:
+            node_uptime_val = get_node_uptime_sec()
+            if node_uptime_val is not None:
+                node_uptime_sec = int(max(_finite(node_uptime_val, 0.0), 0.0))
+        except Exception:
+            pass
+    if isinstance(node_state, dict):
+        node_state["eta_to_sync_sec"] = eta_to_sync_sec
+        if avg_height_rate_5m is not None and math.isfinite(avg_height_rate_5m):
+            node_state["height_rate_5m"] = max(float(avg_height_rate_5m), 0.0)
+        else:
+            node_state["height_rate_5m"] = None
+        node_state_payload = dict(node_state)
+    else:
+        node_state_payload = node_state or {}
     return jsonify({
         "ok": ok,
         "status": "ok" if ok else "degraded",
         "health": "ok" if ok else "degraded",
         "health_text": health_text,
-        "height": int(h) if h is not None else 0,
+        "height": local_height,
+        "height_local": local_height,
+        "height_remote": remote_height_val,
+        "mining_state_sync": mining_state_sync,
         "peers": int(p),
         "rpc_latency_ms": int(rpc_latency_ms),
         "last_seen_ts": int(time.time()*1000),
         "freshness_ms": int((time.time()-APP_START)*1000),
         "window_points": int(WINDOW),
         "sample_sec": int(SAMPLE_SEC),
-        "uptime_sec": int(time.time() - APP_START),
-        "node_state": node_state,
+        "uptime_sec": node_uptime_sec,
+        "node_state": node_state_payload,
+        "eta_to_sync_sec": eta_to_sync_sec,
     })
 
 @app.route("/api/chart/height")
 def chart_height():
-    return jsonify(_series_to_payload(height_series))
+    with lock:
+        local_points = list(height_series)
+        remote_points = list(remote_height_series)
+    labels = [ts for ts, _ in local_points]
+    local = [val for _, val in local_points]
+    remote_lookup = {ts: val for ts, val in remote_points}
+    remote = [remote_lookup.get(ts) for ts in labels]
+    return jsonify({
+        "labels": labels,
+        "local": local,
+        "remote": remote,
+        "len": len(labels),
+    })
 
 @app.route("/api/chart/peers")
 def chart_peers():
@@ -837,6 +1104,7 @@ def _fix_status_height(resp):
                 new_h = get_chain_height_fallback()
                 if new_h:
                     data["height"] = int(new_h)
+                    data["height_local"] = int(new_h)
                     resp.set_data(json.dumps(data))
     except Exception:
         pass
@@ -1027,6 +1295,8 @@ try:
     _HIST_CAP = int(os.getenv("BDAG_HISTORY_CAP", "720"))  # ~24 min @ 2s
     _hist_lock = Lock()
     _hist = {
+        "height_local": deque(maxlen=_HIST_CAP),
+        "height_remote": deque(maxlen=_HIST_CAP),
         "peers":    deque(maxlen=_HIST_CAP),
         "latency":  deque(maxlen=_HIST_CAP),
         "mined":    deque(maxlen=_HIST_CAP),
@@ -1039,16 +1309,33 @@ try:
 
     def _extract(payload: dict):
         a = payload.get("activity") or {}
-        height  = float(payload.get("height") or payload.get("chain_height") or payload.get("block_height") or 0)
+        height_raw = payload.get("height") or payload.get("chain_height") or payload.get("block_height") or 0
+        remote_raw = payload.get("height_remote") or payload.get("remote_height") or payload.get("heightRemote")
+        try:
+            if isinstance(height_raw, str) and height_raw.startswith("0x"):
+                height = float(int(height_raw, 16))
+            else:
+                height = float(height_raw or 0)
+        except Exception:
+            height = 0.0
+        remote = None
+        if remote_raw is not None:
+            try:
+                if isinstance(remote_raw, str) and remote_raw.startswith("0x"):
+                    remote = float(int(remote_raw, 16))
+                else:
+                    remote = float(remote_raw)
+            except Exception:
+                remote = None
         peers   = float(payload.get("peers") or payload.get("peer_count") or 0)
         latency = float(payload.get("rpc_latency_ms") or payload.get("latency_ms") or 0)
         mined     = float((a.get("mined")     or {}).get("rate_per_s", a.get("mined", 0)) or 0)
         processed = float((a.get("processed") or {}).get("rate_per_s", a.get("processed", 0)) or 0)
         sealed    = float((a.get("sealed")    or {}).get("rate_per_s", a.get("sealed", 0)) or 0)
         activity  = max(mined + processed + sealed, 0.0)
-        return height, peers, latency, mined, processed, sealed, activity
+        return height, remote, peers, latency, mined, processed, sealed, activity
 
-    def _push(ts_ms, height, peers, latency, mined, processed, sealed, activity):
+    def _push(ts_ms, height, remote, peers, latency, mined, processed, sealed, activity):
         with _hist_lock:
             dx = 0.0
             if _last_ht["t"] is not None and _last_ht["h"] is not None:
@@ -1057,6 +1344,8 @@ try:
                     dx = max((height - _last_ht["h"]) / dt, 0.0)
             _last_ht["t"] = ts_ms
             _last_ht["h"] = height
+            _hist["height_local"].append((ts_ms, height))
+            _hist["height_remote"].append((ts_ms, remote))
             _hist["peers"].append((ts_ms, peers))
             _hist["latency"].append((ts_ms, latency))
             _hist["mined"].append((ts_ms, mined))
@@ -1102,8 +1391,8 @@ try:
                                     except Exception:
                                         pass
                                 ts_ms = int(time.time() * 1000)
-                                h,p,l,m,pr,s,a = _extract(payload)
-                                _push(ts_ms, h,p,l,m,pr,s,a)
+                                h,r,p,l,m,pr,s,a = _extract(payload)
+                                _push(ts_ms, h,r,p,l,m,pr,s,a)
 
                         # hard no-cache on /api/status responses
                         if request.path == "/api/status":
@@ -1125,13 +1414,15 @@ try:
             payload = _history_payload()
         except Exception:
             payload = {}
-        if any((payload.get(k) or {}).get("labels") for k in ("peers","latency","activity","mined","processed","sealed","height_dx")):
+        if any((payload.get(k) or {}).get("labels") for k in ("height_local","height_remote","peers","latency","activity","mined","processed","sealed","height_dx")):
             return jsonify(payload)
         with _hist_lock:
             def pack(key):
                 arr = list(_hist[key])
                 return {"labels":[t for (t,_) in arr], "series":[v for (_,v) in arr]}
             return jsonify({
+                "height_local": pack("height_local"),
+                "height_remote": pack("height_remote"),
                 "peers":    pack("peers"),
                 "latency":  pack("latency"),
                 "mined":    pack("mined"),

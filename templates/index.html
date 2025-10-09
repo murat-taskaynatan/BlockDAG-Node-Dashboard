@@ -10,8 +10,10 @@
   .wrap{max-width:1200px;margin:24px auto;padding:0 16px}
   .card{background:var(--card);border-radius:16px;box-shadow:0 4px 18px rgba(0,0,0,.25);padding:16px}
   .title{font-weight:600;font-size:20px;margin-bottom:10px;display:flex;align-items:center;gap:10px}
-  .grid{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:16px}
+  .grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;margin-top:16px}
   .kvs{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:8px;margin-top:8px}
+  .kvs.node-stats{display:flex;flex-wrap:nowrap;gap:8px;overflow-x:auto}
+  .kvs.node-stats .kv{flex:1 0 auto;min-width:0}
   .kv{background:rgba(255,255,255,.04);border-radius:12px;padding:10px}
   .kv .k{color:var(--muted);font-size:12px}
   .kv .v{font-size:18px;margin-top:4px}
@@ -25,12 +27,12 @@
 .node-ctrls{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin-top:12px;align-items:end}
 .node-ctrls .btn{padding:.4rem .6rem;border:1px solid #3a4a7a;border-radius:.6rem;background:transparent;color:inherit;cursor:pointer}
 .node-ctrls .btn:disabled{opacity:.5;cursor:not-allowed}
-.node-ctrls select{background:transparent;border:1px solid #3a4a7a;border-radius:.6rem;padding:.35rem .5rem;color:inherit}
 .node-ctrls .sp{opacity:.7;margin:0 .2rem;grid-column:1/-1}
 .node-ctrls label{display:flex;flex-direction:column;gap:4px;font-size:11px;text-transform:uppercase;letter-spacing:.06em}
 .node-ctrls label span{opacity:.7}
-.node-ctrls input,.node-ctrls select{background:transparent;border:1px solid #3a4a7a;border-radius:.6rem;padding:.35rem .6rem;color:inherit}
-.node-ctrls select{width:100%;appearance:none;background-image:linear-gradient(45deg,transparent 50%,currentColor 50%),linear-gradient(135deg,currentColor 50%,transparent 50%);background-position:calc(100% - 18px) calc(50% - 3px),calc(100% - 12px) calc(50% - 3px);background-size:6px 6px;background-repeat:no-repeat;padding-right:1.8rem}
+.node-ctrls input{background:transparent;border:1px solid #3a4a7a;border-radius:.6rem;padding:.35rem .6rem;color:inherit}
+.node-ctrls select{width:100%;appearance:none;background-color:rgba(255,255,255,.06);border:1px solid #3a4a7a;border-radius:.6rem;padding:.35rem .6rem;color:var(--text);background-image:linear-gradient(45deg,transparent 50%,currentColor 50%),linear-gradient(135deg,currentColor 50%,transparent 50%);background-position:calc(100% - 18px) calc(50% - 3px),calc(100% - 12px) calc(50% - 3px);background-size:6px 6px;background-repeat:no-repeat;padding-right:1.8rem}
+.node-ctrls select option{background-color:var(--card);color:var(--text)}
 #ctlStatus{min-width:120px;display:inline-block;opacity:1}
   .activity-head{display:flex;flex-wrap:wrap;gap:16px;align-items:flex-start;margin-bottom:8px}
   .activity-head-col{flex:1 1 320px}
@@ -40,7 +42,10 @@
 .activity-kvs{flex:1 1 320px;display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:8px}
 .activity-controls{flex:1 1 280px}
 .activity-controls .node-ctrls{margin-top:0}
-.log-output{background:rgba(33,24,0,.45);border-radius:12px;padding:12px;margin:0;font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono","Courier New",monospace;font-size:12px;line-height:1.4;white-space:pre-wrap;word-break:break-word;max-height:260px;overflow-y:auto;border:1px solid rgba(255,167,38,.35);color:#ffb74d;}
+  .log-output{background:rgba(33,24,0,.45);border-radius:12px;padding:12px;margin:0;font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono","Courier New",monospace;font-size:12px;line-height:1.4;white-space:pre-wrap;word-break:break-word;max-height:252px;overflow-y:auto;border:1px solid rgba(255,167,38,.35);color:#ffb74d;scrollbar-width:thin;scrollbar-color:#20263d rgba(255,255,255,0.16);}
+  .log-output::-webkit-scrollbar{width:8px;height:8px}
+  .log-output::-webkit-scrollbar-track{background:rgba(255,255,255,0.16);border-radius:8px}
+  .log-output::-webkit-scrollbar-thumb{background:#20263d;border-radius:8px}
 .logs-card details{display:block}
 .logs-card summary{cursor:pointer;list-style:none;display:flex;align-items:center;justify-content:space-between;gap:12px;font-weight:600;font-size:18px;margin-bottom:12px}
 .logs-card summary::-webkit-details-marker{display:none}
@@ -64,11 +69,13 @@
     <!-- Node Stats -->
     <div class="card">
       <div class="title">Node Stats</div>
-      <div class="kvs">
-        <div class="kv"><div class="k">height</div><div class="v" id="vHeight">—</div></div>
+      <div class="kvs node-stats">
+        <div class="kv"><div class="k">local height</div><div class="v" id="vLocalHeight">—</div></div>
+        <div class="kv"><div class="k">remote height</div><div class="v" id="vRemoteHeight">—</div></div>
+        <div class="kv"><div class="k">state sync</div><div class="v" id="vStateSync">—</div></div>
+        <div class="kv"><div class="k">ETA to full sync</div><div class="v" id="vEtaSync">—</div></div>
         <div class="kv"><div class="k">peers</div><div class="v" id="vPeers">—</div></div>
         <div class="kv"><div class="k">rpc latency (ms)</div><div class="v" id="vLat">—</div></div>
-        <div class="kv"><div class="k">status</div><div class="v" id="vStatus">—</div></div>
         <div class="kv"><div class="k">last seen</div><div class="v" id="vLast">—</div></div>
         <div class="kv"><div class="k">uptime</div><div class="v" id="vUptime">—</div></div>
       </div>
@@ -78,7 +85,7 @@
     <div class="card">
       <div class="activity-head">
         <div class="activity-head-col">
-          <div class="title">Activity Totals</div>
+          <div class="title">Block Activity</div>
         </div>
         <div class="activity-head-col activity-head-col--controls">
           <div class="title">Chart Controls</div>
@@ -123,7 +130,7 @@
     <!-- Charts -->
     <div class="card">
       <div class="grid">
-        <div><canvas id="blockActivityChart"></canvas></div>
+        <div><canvas id="heightChart"></canvas></div>
         <div><canvas id="peersChart"></canvas></div>
         <div><canvas id="latencyChart"></canvas></div>
         <div><canvas id="activityChart"></canvas></div>
@@ -148,38 +155,51 @@
 </div>
 
 <!-- Chart.js -->
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js">
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<!-- charts singleton wrapper -->
+<script>
+(function(){
+  if (window.__ChartSingletonPatched) return;
+  window.__ChartSingletonPatched = true;
 
-    <!-- charts singleton wrapper -->
-    <script>
-    (function(){
-      if (window.__ChartSingletonPatched) return;
-      window.__ChartSingletonPatched = true;
+  const _Chart = window.Chart;
+  if (!_Chart) { console.warn("[charts] Chart.js not loaded yet; singleton wrapper will noop."); return; }
 
-      const _Chart = window.Chart;
-      if (!_Chart) { console.warn("[charts] Chart.js not loaded yet; singleton wrapper will noop."); return; }
+  const origCtor = _Chart.prototype.constructor;
+  const origDestroy = _Chart.prototype.destroy;
+  const store = (window.__charts = window.__charts || {});
 
-      const orig = _Chart.prototype.constructor;
-      _Chart.prototype.constructor = function(ctx, cfg){
-        try {
-          const id = ctx && ctx.canvas && (ctx.canvas.id || ctx.canvas.getAttribute("id")) || null;
-          if (id) {
-            const store = (window.__charts = window.__charts || {});
-            if (store[id]) {
-              // reuse existing instance instead of recreating
-              return store[id];
-            }
-            const inst = orig.apply(this, arguments);
-            store[id] = inst;
-            inst.__id = id;
-            return inst;
-          }
-        } catch(e) {}
-        return orig.apply(this, arguments);
-      };
-    })();
-    </script>
-  
+  if (!_Chart.prototype.__singletonDestroyPatched){
+    _Chart.prototype.destroy = function(){
+      try{
+        const id = this && this.canvas && (this.canvas.id || this.canvas.getAttribute("id"));
+        if (id && store[id] === this){
+          delete store[id];
+        }
+      }catch(e){}
+      if (typeof origDestroy === 'function'){
+        return origDestroy.apply(this, arguments);
+      }
+    };
+    _Chart.prototype.__singletonDestroyPatched = true;
+  }
+
+  _Chart.prototype.constructor = function(ctx, cfg){
+    try {
+      const id = ctx && ctx.canvas && (ctx.canvas.id || ctx.canvas.getAttribute("id")) || null;
+      if (id) {
+        if (store[id]) {
+          return store[id];
+        }
+        const inst = origCtor.apply(this, arguments);
+        store[id] = inst;
+        inst.__id = id;
+        return inst;
+      }
+    } catch(e) {}
+    return origCtor.apply(this, arguments);
+  };
+})();
 </script>
 <script>
 const mkLine = (ctx, label, data, labels) => {
@@ -198,8 +218,27 @@ const mkLine = (ctx, label, data, labels) => {
 };
 
 let charts = {};
-const chartModes = { blockActivity: 'absolute', peers: 'delta' };
-const baseChartLabels = { blockActivity: 'Block Activity', peers: 'Peers', latency: 'RPC Latency (ms)' };
+const chartModes = { peers: 'delta' };
+const baseChartLabels = { peers: 'Peers', latency: 'RPC Latency (ms)' };
+
+const legendOffsetPlugin = {
+  id: 'legendOffset',
+  afterLayout(chart) {
+    const cfg = chart.options?.plugins?.legendOffset;
+    if (!cfg) return;
+    const legend = chart.legend;
+    if (!legend) return;
+    const x = Number(cfg.x) || 0;
+    if (x){
+      legend.left += x;
+      legend.right += x;
+    }
+  }
+};
+if (window.Chart && !window.__legendOffsetRegistered){
+  try { window.Chart.register(legendOffsetPlugin); } catch(_) {}
+  window.__legendOffsetRegistered = true;
+}
 
 function hexToRgba(hex, alpha){
   const match = /^#?([0-9a-f]{6})$/i.exec(hex || '');
@@ -255,6 +294,37 @@ function normalizeSeries(raw){
   return raw.map(v => Number(v));
 }
 
+function normalizeHeightSeries(series, length){
+  const len = Number(length) || 0;
+  const src = Array.isArray(series) ? series : [];
+  const out = new Array(len);
+  for (let i = 0; i < len; i++){
+    const raw = src[i];
+    if (raw == null){
+      out[i] = null;
+      continue;
+    }
+    const num = Number(raw);
+    out[i] = Number.isFinite(num) ? num : null;
+  }
+  return out;
+}
+
+function toDeltaSeries(series){
+  if (!Array.isArray(series) || !series.length) return [];
+  let baseline = null;
+  return series.map(val => {
+    if (!Number.isFinite(val)){
+      return null;
+    }
+    if (baseline === null){
+      baseline = val;
+      return 0;
+    }
+    return val - baseline;
+  });
+}
+
 function transformForMode(key, raw){
   const data = normalizeSeries(raw);
   if (!data.length) return data;
@@ -271,7 +341,7 @@ function labelFor(key){
 }
 
 function updateLineChart(key, labels, rawData){
-  const canvasMap = { blockActivity:'blockActivityChart', peers:'peersChart', latency:'latencyChart' };
+  const canvasMap = { peers:'peersChart', latency:'latencyChart' };
   const canvasId = canvasMap[key];
   if (!canvasId) return;
   const datasetLabel = labelFor(key);
@@ -336,6 +406,132 @@ function renderChartValue(key, data, label){
   tag.textContent = formatValueDisplay(latest);
 }
 
+function renderHeightValue(localSeries, remoteSeries){
+  const chart = charts.height;
+  if (!chart) return;
+  const tag = ensureChartTag(chart, 'Height');
+  if (!tag) return;
+  const pickLatest = (arr) => {
+    if (!Array.isArray(arr)) return null;
+    for (let i = arr.length - 1; i >= 0; i--){
+      const val = arr[i];
+      if (Number.isFinite(val)) return val;
+    }
+    return null;
+  };
+  const localLatest = pickLatest(localSeries);
+  const remoteLatest = pickLatest(remoteSeries);
+  const diff = (Number.isFinite(localLatest) && Number.isFinite(remoteLatest)) ? (remoteLatest - localLatest) : null;
+  const diffText = Number.isFinite(diff) ? ` · Δ ${formatValueDisplay(diff)}` : '';
+  tag.textContent = `L ${formatValueDisplay(localLatest)} · R ${formatValueDisplay(remoteLatest)}${diffText}`;
+  tag.title = 'Local vs Remote height · Δ = remote - local';
+}
+
+function formatHeightLabel(value){
+  const num = Number(value);
+  if (Number.isFinite(num) && num > 1e11){
+    const date = new Date(num);
+    return date.toLocaleTimeString([], { hour12:false, hour:'2-digit', minute:'2-digit', second:'2-digit' });
+  }
+  if (value === null || value === undefined) return '';
+  return String(value);
+}
+
+function buildHeightChart(canvas, labels, localDelta, remoteDelta){
+  const ctx = canvas.getContext('2d');
+  const labelStrings = labels.map(formatHeightLabel);
+  const baseTickColor = (window.Chart && window.Chart.defaults && window.Chart.defaults.color) || '#666';
+  return new Chart(ctx, {
+    type:'line',
+    data:{
+      labels: labelStrings,
+      datasets:[
+        {
+          label:'Local Height Δ',
+          data: localDelta,
+          borderColor:'#25d366',
+          backgroundColor:'rgba(37,211,102,0.12)',
+          fill:false,
+          tension:0.25,
+          pointRadius:0,
+          borderWidth:2,
+          spanGaps:true
+        },
+        {
+          label:'Remote Height Δ',
+          data: remoteDelta,
+          borderColor:'#64b5f6',
+          backgroundColor:'rgba(100,181,246,0.1)',
+          borderDash:[6,4],
+          fill:false,
+          tension:0.25,
+          pointRadius:0,
+          borderWidth:2,
+          spanGaps:true
+        }
+      ]
+    },
+    options:{
+      animation:false,
+      responsive:true,
+      maintainAspectRatio:false,
+      interaction:{ mode:'nearest', intersect:false },
+      plugins:{
+        legend:{
+          display:true,
+          labels:{
+            color: baseTickColor,
+            usePointStyle:true,
+            padding:16,
+            boxWidth:12,
+            boxHeight:12
+          }
+        },
+        legendOffset:{ x:-25 },
+        tooltip:{
+          mode:'index',
+          intersect:false,
+          callbacks:{
+            label(ctx){
+              const label = ctx.dataset?.label ? `${ctx.dataset.label}: ` : '';
+              return `${label}${formatValueDisplay(ctx.parsed.y)}`;
+            }
+          }
+        }
+      },
+      scales:{
+        x:{
+          ticks:{ display:false, color: baseTickColor },
+          grid:{ display:false }
+        },
+        y:{
+          beginAtZero:false,
+          ticks:{ color: baseTickColor },
+          grid:{ color:'rgba(255,255,255,0.05)' }
+        }
+      }
+    }
+  });
+}
+
+function updateHeightChart(labels, localSeries, remoteSeries){
+  const canvas = document.getElementById('heightChart');
+  if (!canvas) return;
+  const labelList = Array.isArray(labels) ? labels.slice() : [];
+  const len = labelList.length;
+  const localData = normalizeHeightSeries(localSeries, len);
+  const remoteData = normalizeHeightSeries(remoteSeries, len);
+  const localDelta = toDeltaSeries(localData);
+  const remoteDelta = toDeltaSeries(remoteData);
+  if (charts.height){
+    try{ charts.height.destroy(); }catch(_){}
+    charts.height = null;
+  }
+  charts.height = buildHeightChart(canvas, labelList, localDelta, remoteDelta);
+  charts.height._valueTag = null;
+  renderHeightValue(localData, remoteData);
+}
+
 function renderActivityValue(minedSeries, processedSeries, sealedSeries){
   const chart = charts.activity;
   if (!chart) return;
@@ -346,19 +542,6 @@ function renderActivityValue(minedSeries, processedSeries, sealedSeries){
   const processedLatest = pickLatest(processedSeries);
   const sealedLatest = pickLatest(sealedSeries);
   tag.textContent = `M ${formatValueDisplay(minedLatest)} · P ${formatValueDisplay(processedLatest)} · S ${formatValueDisplay(sealedLatest)}`;
-}
-
-function computeActivityTotals(labels, minedSeries, processedSeries, sealedSeries){
-  if (!Array.isArray(labels) || !labels.length) return null;
-  const len = labels.length;
-  const totals = [];
-  for (let i = 0; i < len; i++){
-    const mined = Number((minedSeries || [])[i] ?? 0);
-    const processed = Number((processedSeries || [])[i] ?? 0);
-    const sealed = Number((sealedSeries || [])[i] ?? 0);
-    totals.push(mined + processed + sealed);
-  }
-  return { labels, data: totals };
 }
 
 function fmtTime(ms){
@@ -383,10 +566,48 @@ async function refreshStatus(){
       applyPillStyle(pill, color, 0.2);
       if (pill.dataset){ pill.dataset.state = ns.code || ''; }
     }
-    document.getElementById('vHeight').textContent = j.height;
+    const formatInt = (val) => (typeof val === 'number' && Number.isFinite(val) ? val.toLocaleString() : '—');
+    const localHeightVal = Number.isFinite(j.height_local) ? j.height_local : (Number.isFinite(j.height) ? j.height : null);
+    const remoteHeightVal = Number.isFinite(j.height_remote) ? j.height_remote : null;
+    const formatStateSync = (val) => {
+      if (typeof val === 'boolean') return val ? 'enabled' : 'disabled';
+      if (val === null || typeof val === 'undefined') return 'unknown';
+      return String(val);
+    };
+    const localHeightEl = document.getElementById('vLocalHeight');
+    if (localHeightEl){
+      localHeightEl.textContent = formatInt(localHeightVal);
+    }
+    const remoteHeightEl = document.getElementById('vRemoteHeight');
+    if (remoteHeightEl){
+      remoteHeightEl.textContent = formatInt(remoteHeightVal);
+    }
+    const stateSyncEl = document.getElementById('vStateSync');
+    if (stateSyncEl){
+      stateSyncEl.textContent = formatStateSync(j.mining_state_sync);
+    }
+    const etaEl = document.getElementById('vEtaSync');
+    if (etaEl){
+      const candidates = [j.node_state?.eta_to_sync_sec, j.eta_to_sync_sec];
+      let etaSec = null;
+      for (const candidate of candidates){
+        if (candidate === null || typeof candidate === 'undefined') continue;
+        const num = Number(candidate);
+        if (Number.isFinite(num)){
+          etaSec = num;
+          break;
+        }
+      }
+      if (etaSec === null){
+        etaEl.textContent = '—';
+      } else if (etaSec <= 0){
+        etaEl.textContent = 'synced';
+      } else {
+        etaEl.textContent = formatDuration(etaSec);
+      }
+    }
     document.getElementById('vPeers').textContent  = j.peers;
     document.getElementById('vLat').textContent    = j.rpc_latency_ms;
-    document.getElementById('vStatus').textContent = (j.node_state && j.node_state.label) || j.status;
     const lastSeenEl = document.getElementById('vLast');
     if (lastSeenEl){
       const ts = Number(j.last_seen_ts);
@@ -416,6 +637,8 @@ async function refreshStatus(){
     if (lastSeenEl){ lastSeenEl.textContent = '—'; }
     const uptimeEl = document.getElementById('vUptime');
     if (uptimeEl){ uptimeEl.textContent = '—'; }
+    const etaEl = document.getElementById('vEtaSync');
+    if (etaEl){ etaEl.textContent = '—'; }
   }
 }
 
@@ -450,12 +673,18 @@ async function refreshLogs(){
 async function refreshCharts(){
   if (!window.Chart) return;
   const fetchJSON = u => fetch(u).then(r=>r.json()).catch(()=>null);
-  const [p,l,a] = await Promise.all([
+  const [h,p,l,a] = await Promise.all([
+    fetchJSON('/api/chart/height'),
     fetchJSON('/api/chart/peers'),
     fetchJSON('/api/chart/latency'),
     fetchJSON('/api/chart/activity'),
   ]);
 
+  if (h){
+    updateHeightChart(h.labels || [], h.local || [], h.remote || []);
+  }else{
+    updateHeightChart([], [], []);
+  }
   if (p){
     updateLineChart('peers', p.labels || [], p.data || []);
   }
@@ -463,39 +692,44 @@ async function refreshCharts(){
     updateLineChart('latency', l.labels || [], l.data || []);
   }
   if (a){
-    const ctx = document.getElementById('activityChart').getContext('2d');
-    if (!charts.activity){
-      charts.activity ||= new Chart(ctx, {
-        type:'line',
-        data:{
-          labels: a.labels,
-          datasets:[
-            { label:'Mined', data:a.mined, fill:false, tension:0.25, pointRadius:0, borderWidth:2 },
-            { label:'Processed', data:a.processed, fill:false, tension:0.25, pointRadius:0, borderWidth:2 },
-            { label:'Sealed', data:a.sealed, fill:false, tension:0.25, pointRadius:0, borderWidth:2 },
-          ]
-        },
-        options:{
-          animation:false, responsive:true, maintainAspectRatio:false,
-          scales:{ x:{ ticks:{display:false}}, y:{ beginAtZero:true }},
-          plugins:{ legend:{ display:true } }
-        }
-      });
-      charts.activity._valueTag = null;
-    }else{
-      charts.activity.data.labels = a.labels;
-      charts.activity.data.datasets[0].data = a.mined;
-      charts.activity.data.datasets[1].data = a.processed;
-      charts.activity.data.datasets[2].data = a.sealed;
-      charts.activity.update('none');
+    const labels = Array.isArray(a.labels) ? a.labels : [];
+    const minedSeries = Array.isArray(a.mined) ? a.mined : [];
+    const processedSeries = Array.isArray(a.processed) ? a.processed : [];
+    const sealedSeries = Array.isArray(a.sealed) ? a.sealed : [];
+    const ctx = document.getElementById('activityChart')?.getContext('2d');
+    if (ctx){
+      if (!charts.activity){
+        charts.activity = new Chart(ctx, {
+          type:'line',
+          data:{
+            labels,
+            datasets:[
+              { label:'Mined', data:minedSeries, fill:false, tension:0.25, pointRadius:0, borderWidth:2 },
+              { label:'Processed', data:processedSeries, fill:false, tension:0.25, pointRadius:0, borderWidth:2 },
+              { label:'Sealed', data:sealedSeries, fill:false, tension:0.25, pointRadius:0, borderWidth:2 },
+            ]
+          },
+          options:{
+            animation:false, responsive:true, maintainAspectRatio:false,
+            scales:{ x:{ ticks:{display:false}}, y:{ beginAtZero:true }},
+            plugins:{ legend:{ display:true } }
+          }
+        });
+        charts.activity._valueTag = null;
+      }else{
+        charts.activity.data.labels = labels;
+        charts.activity.data.datasets[0].data = minedSeries;
+        charts.activity.data.datasets[1].data = processedSeries;
+        charts.activity.data.datasets[2].data = sealedSeries;
+        charts.activity.update('none');
+      }
+      renderActivityValue(minedSeries, processedSeries, sealedSeries);
     }
-    const totals = computeActivityTotals(a.labels, a.mined, a.processed, a.sealed);
-    if (totals){
-      updateLineChart('blockActivity', totals.labels, totals.data);
-    }
-    renderActivityValue(a.mined, a.processed, a.sealed);
-  }else{
-    updateLineChart('blockActivity', [], []);
+  }else if (charts.activity){
+    charts.activity.data.labels = [];
+    charts.activity.data.datasets.forEach(ds => { ds.data = []; });
+    charts.activity.update('none');
+    renderActivityValue([], [], []);
   }
 }
 
@@ -517,10 +751,11 @@ async function preloadHistory(){
     primeLine('peers');
     primeLine('latency');
 
-    const blockLabels = labelsFor('activity');
-    const blockTotals = seriesFor('activity');
-    if (blockLabels.length){
-      updateLineChart('blockActivity', blockLabels, blockTotals);
+    const heightLabels = labelsFor('height_local');
+    if (heightLabels.length){
+      updateHeightChart(heightLabels, seriesFor('height_local'), seriesFor('height_remote'));
+    }else{
+      updateHeightChart([], [], []);
     }
 
     const actLabels = labelsFor('activity');
