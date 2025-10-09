@@ -31,6 +31,14 @@ A Flask-based monitoring dashboard for BlockDAG nodes. The UI surfaces node heal
 - A running BlockDAG node RPC endpoint
 
 ### Quick Install
+
+Clone the repository
+
+```bash
+
+git clone https://github.com/murat-taskaynatan/BlockDAG-Node-Dashboard.git
+
+
 To install system-wide (requires sudo):
 
 ```bash
