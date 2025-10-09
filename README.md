@@ -17,7 +17,9 @@ A Flask-based monitoring dashboard for BlockDAG nodes. The UI surfaces node heal
     logs, trims ANSI noise, and remembers scroll state so ops teams can spot regressions fast.
 
    Log View
-  <img width="1101" height="369" alt="image" src="https://github.com/user-attachments/assets/24ee1c39-9d94-41e0-bc78-452eed079286" />
+   
+<img width="1077" height="308" alt="image" src="https://github.com/user-attachments/assets/562dc940-ab93-483f-bc92-6c9e660ecd20" />
+
 
     
 
