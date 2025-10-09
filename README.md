@@ -8,6 +8,11 @@ A Flask-based monitoring dashboard for BlockDAG nodes. The UI surfaces node heal
 - Chart controls for sampling window and history length, with server-side buffering.
 - Dynamic Flask route `/api/status` and chart APIs powering the frontend.
 
+ Recent Log View
+ 
+ <img width="1073" height="307" alt="image" src="https://github.com/user-attachments/assets/02dfe1fc-96e8-4a8e-a05f-b3ce69b3fcd3" />
+
+
 ## Getting Started
 
 ### Prerequisites
