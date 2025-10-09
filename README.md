@@ -50,7 +50,7 @@ To install system-wide (requires sudo):
 ./scripts/install_dashboard.sh
 ```
 
-The `install_dashboard.sh` script syncs the repo to `/opt/blockdag-dashboard`, installs dependencies, and optionally registers a `blockdag-dashboard.service` systemd unit.
+The `install_dashboard.sh` script syncs the repo to `/opt/blockdag-dashboard`, installs dependencies, and registers a `blockdag-dashboard.service` systemd unit.
 
 ### Local Development
 
