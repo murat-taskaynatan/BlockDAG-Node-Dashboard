@@ -44,7 +44,7 @@ git clone https://github.com/murat-taskaynatan/BlockDAG-Node-Dashboard.git
 
 ./scripts/setup_environment.sh
 ./scripts/install_dashboard.sh
-```
+``
 
 The `install_dashboard.sh` script syncs the repo to `/opt/blockdag-dashboard`, installs dependencies, and optionally registers a `blockdag-dashboard.service` systemd unit.
 
