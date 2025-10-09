@@ -42,10 +42,10 @@
 .activity-controls .node-ctrls{margin-top:0}
 .log-output{background:rgba(33,24,0,.45);border-radius:12px;padding:12px;margin:0;font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono","Courier New",monospace;font-size:12px;line-height:1.4;white-space:pre-wrap;word-break:break-word;max-height:260px;overflow-y:auto;border:1px solid rgba(255,167,38,.35);color:#ffb74d;}
 .logs-card details{display:block}
-.logs-card summary{cursor:pointer;list-style:none;display:flex;align-items:center;gap:12px;font-weight:600;font-size:18px;margin-bottom:12px}
+.logs-card summary{cursor:pointer;list-style:none;display:flex;align-items:center;justify-content:space-between;gap:12px;font-weight:600;font-size:18px;margin-bottom:12px}
 .logs-card summary::-webkit-details-marker{display:none}
-.logs-card summary::after{display:none}
-.log-toggle-icon{font-size:12px;color:var(--muted);transition:transform .2s ease}
+.log-toggle-wrapper{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--muted)}
+.log-toggle-icon{display:inline-block;transition:transform .2s ease}
 .logs-card details[open] .log-toggle-icon{transform:rotate(0deg)}
 .logs-card details:not([open]) .log-toggle-icon{transform:rotate(-90deg)}
 </style>
@@ -133,7 +133,13 @@
     <!-- Recent Logs -->
     <div class="card logs-card">
       <details id="logsPanel" open>
-        <summary data-state="Hide">Recent Logs <span class="log-toggle-icon" aria-hidden="true">▼</span></summary>
+        <summary>
+          <span class="log-title">Recent Logs</span>
+          <span class="log-toggle-wrapper">
+            <span class="log-toggle-text">Hide</span>
+            <span class="log-toggle-icon" aria-hidden="true">▼</span>
+          </span>
+        </summary>
         <pre id="logOutput" class="log-output" data-last-text="" aria-live="polite">Loading…</pre>
       </details>
     </div>
@@ -670,10 +676,12 @@ function wireLogsPanel(){
   const panel = document.getElementById('logsPanel');
   if (!panel) return;
   const summary = panel.querySelector('summary');
+  const toggleText = summary ? summary.querySelector('.log-toggle-text') : null;
   const icon = summary ? summary.querySelector('.log-toggle-icon') : null;
   const update = () => {
-    if (summary){ summary.dataset.state = panel.open ? 'Hide' : 'Show'; }
-    if (icon){ icon.textContent = panel.open ? '▼' : '▶'; }
+    const open = panel.open;
+    if (toggleText){ toggleText.textContent = open ? 'Hide' : 'Show'; }
+    if (icon){ icon.textContent = open ? '▼' : '▶'; }
   };
   panel.addEventListener('toggle', update);
   update();
