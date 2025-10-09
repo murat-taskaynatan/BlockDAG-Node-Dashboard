@@ -355,13 +355,33 @@ def is_mining_state_sync_enabled(force: bool = False):
 def get_peer_count():
     # Prefer ETH-style 2.0 peers, then fallback to Bitcoin 1.0 getconnectioncount
     v = try_methods(["net_peerCount","peer_count"])
-    if v is not None:
-        return v
+    base = v if isinstance(v, int) else int(v) if isinstance(v, float) else None
+    if isinstance(base, int) and base > 0:
+        return base
+    try:
+        peer_info = rpc_call("bdag_getPeerInfo", [])
+        if isinstance(peer_info, list):
+            active = 0
+            for peer in peer_info:
+                if isinstance(peer, dict):
+                    if peer.get("active") is True or peer.get("state") is True:
+                        active += 1
+                else:
+                    active += 1
+            if active <= 0:
+                active = len(peer_info)
+            if active >= 0:
+                return int(active)
+    except Exception:
+        pass
     try:
         res = btc_rpc_call("getconnectioncount", [])
-        return int(res)
+        count = int(res)
+        if count > 0:
+            return count
     except Exception:
-        return 0
+        pass
+    return base if isinstance(base, int) and base >= 0 else 0
 
 # ----- Sampling -----
 def _update_node_state(sample: dict):
