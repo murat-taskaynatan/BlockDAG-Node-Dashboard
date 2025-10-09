@@ -4,7 +4,7 @@ A Flask-based monitoring dashboard for BlockDAG nodes. The UI surfaces node heal
 
 <img width="1078" height="880" alt="image" src="https://github.com/user-attachments/assets/dee39e62-66ba-41e5-8a04-c1fdcada6ba1" />
 
-
+<br>
 
  -  Chart suite (height, peers, latency, activity) replaces the static view—live value badges, remote vs local height
     overlays, and buffered history preloads deliver at-a-glance trend insight unavailable in the previous Git build.
