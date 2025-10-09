@@ -621,6 +621,21 @@ def api_control():
     else:
         return jsonify({"ok":False, "error":"unknown action"}), 400
 
+@app.route("/api/logs/recent")
+def api_logs_recent():
+    limit_param = request.args.get("limit", "50")
+    try:
+        limit_int = int(limit_param)
+    except Exception:
+        limit_int = 50
+    lines = _get_recent_logs(limit_int)
+    return jsonify({
+        "lines": lines,
+        "limit": max(1, min(int(limit_int), 200)),
+        "count": len(lines),
+        "generated_ts": int(time.time() * 1000),
+    })
+
 @app.route("/healthz")
 def healthz():
     return "ok\n", 200, {"content-type":"text/plain; charset=utf-8"}
@@ -768,6 +783,40 @@ def peers_or_fb(peers):
     except Exception:
         pass
     return p
+
+_RECENT_LOGS_CACHE = {"ts": 0, "limit": 0, "lines": []}
+
+def _get_recent_logs(limit=50):
+    try:
+        limit_int = max(1, min(int(limit), 200))
+    except Exception:
+        limit_int = 50
+    now = time.time()
+    cache = _RECENT_LOGS_CACHE
+    if cache["lines"] and cache["limit"] == limit_int and (now - cache["ts"]) < 2:
+        return list(cache["lines"])
+    lines = []
+    try:
+        import re
+        ansi_re = re.compile(r"\x1B\[[0-?]*[ -/]*[@-~]")
+    except Exception:
+        ansi_re = None
+    try:
+        out = subprocess.check_output(
+            ["docker", "logs", "--tail", str(limit_int), "--timestamps", "blockdag-testnet-network"],
+            stderr=subprocess.STDOUT,
+            text=True,
+            timeout=4,
+        )
+        raw = [ln.rstrip() for ln in out.splitlines() if ln.strip()]
+        if ansi_re:
+            lines = [ansi_re.sub("", ln) for ln in raw]
+        else:
+            lines = raw
+    except Exception:
+        pass
+    cache.update({"ts": now, "limit": limit_int, "lines": lines})
+    return list(lines)
 
 # ---- BEGIN: /api/status height fixer hook ----
 try:

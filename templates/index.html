@@ -40,6 +40,11 @@
 .activity-kvs{flex:1 1 320px;display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:8px}
 .activity-controls{flex:1 1 280px}
 .activity-controls .node-ctrls{margin-top:0}
+.log-output{background:rgba(33,24,0,.45);border-radius:12px;padding:12px;margin:0;font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono","Courier New",monospace;font-size:12px;line-height:1.4;white-space:pre-wrap;word-break:break-word;max-height:260px;overflow-y:auto;border:1px solid rgba(255,167,38,.35);color:#ffb74d;}
+.logs-card details{display:block}
+.logs-card summary{cursor:pointer;list-style:none;display:flex;align-items:center;justify-content:space-between;font-weight:600;font-size:18px;margin-bottom:12px}
+.logs-card summary::-webkit-details-marker{display:none}
+.logs-card summary::after{content:attr(data-state);font-size:12px;color:var(--muted)}
 </style>
 
 <div class="wrap">
@@ -120,6 +125,14 @@
         <div><canvas id="latencyChart"></canvas></div>
         <div><canvas id="activityChart"></canvas></div>
       </div>
+    </div>
+
+    <!-- Recent Logs -->
+    <div class="card logs-card">
+      <details id="logsPanel" open>
+        <summary data-state="Hide">Recent Logs</summary>
+        <pre id="logOutput" class="log-output" data-last-text="" aria-live="polite">Loading…</pre>
+      </details>
     </div>
 
   </div>
@@ -344,6 +357,8 @@ function fmtTime(ms){
   return d.toLocaleString();
 }
 
+const LOG_LINES_LIMIT = 60;
+
 async function refreshStatus(){
   try{
     const r = await fetch('/api/status', {cache:'no-store'});
@@ -392,6 +407,34 @@ async function refreshStatus(){
     if (lastSeenEl){ lastSeenEl.textContent = '—'; }
     const uptimeEl = document.getElementById('vUptime');
     if (uptimeEl){ uptimeEl.textContent = '—'; }
+  }
+}
+
+async function refreshLogs(){
+  const el = document.getElementById('logOutput');
+  if (!el) return;
+  const panel = document.getElementById('logsPanel');
+  if (panel && !panel.open) return;
+  try{
+    const res = await fetch(`/api/logs/recent?limit=${LOG_LINES_LIMIT}`, { cache:'no-store' });
+    if (!res.ok) throw new Error(res.status || 'logs fetch failed');
+    const data = await res.json();
+    const lines = Array.isArray(data.lines) ? data.lines : [];
+    const text = lines.join('\n');
+    if (!text){
+      if (el.dataset.lastText !== '--empty--'){
+        el.textContent = 'No logs available.';
+        el.dataset.lastText = '--empty--';
+      }
+      return;
+    }
+    if (el.dataset.lastText !== text){
+      el.textContent = text;
+      el.dataset.lastText = text;
+      el.scrollTop = el.scrollHeight;
+    }
+  }catch(err){
+    el.textContent = 'Failed to load logs';
   }
 }
 
@@ -620,13 +663,30 @@ function wireControls(){
   }
 }
 
+function wireLogsPanel(){
+  const panel = document.getElementById('logsPanel');
+  if (!panel) return;
+  const summary = panel.querySelector('summary');
+  const updateLabel = () => {
+    if (summary){
+      summary.dataset.state = panel.open ? 'Hide' : 'Show';
+    }
+  };
+  panel.addEventListener('toggle', updateLabel);
+  updateLabel();
+}
+
 const pollMs = Number(window.POLL_INTERVAL || 2000) || 2000;
 (async () => {
   wireControls();
+  wireLogsPanel();
   await loadChartConfig();
   await preloadHistory();
   await tick();
+  await refreshLogs();
   setInterval(tick, pollMs);
+  const logsInterval = Math.max(5000, pollMs * 2);
+  setInterval(refreshLogs, logsInterval);
 })();
 </script>
 <script>window.POLL_INTERVAL = {{ poll_interval_ms | safe }};</script>
