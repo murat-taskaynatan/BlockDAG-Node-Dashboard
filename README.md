@@ -38,6 +38,8 @@ Clone the repository
 
 git clone https://github.com/murat-taskaynatan/BlockDAG-Node-Dashboard.git
 
+```
+
 ##To install system-wide (requires sudo):
 
 ./scripts/setup_environment.sh
