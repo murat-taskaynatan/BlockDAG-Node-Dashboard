@@ -15,13 +15,14 @@ A Flask-based monitoring dashboard for BlockDAG nodes. The UI surfaces node heal
     buffered data on load, and see live value tags across height, peers, latency, and activity charts.
   - Recent Log Monitor (rolled out in the prior release) now lives inside a collapsible card that streams the latest node
     logs, trims ANSI noise, and remembers scroll state so ops teams can spot regressions fast.
+    
 
    Log View
    
 <img width="1077" height="308" alt="image" src="https://github.com/user-attachments/assets/562dc940-ab93-483f-bc92-6c9e660ecd20" />
 
 
-    
+
 
 ## Getting Started
 
