@@ -93,9 +93,9 @@
       </div>
       <div class="activity-body">
         <div class="kvs activity-kvs">
-          <div class="kv"><div class="k">mined (blk/s)</div><div class="v" id="vMined">—</div></div>
-          <div class="kv"><div class="k">processed (blk/s)</div><div class="v" id="vProcessed">—</div></div>
-          <div class="kv"><div class="k">sealed (blk/s)</div><div class="v" id="vSealed">—</div></div>
+          <div class="kv"><div class="k">mined (blk/min)</div><div class="v" id="vMined">—</div></div>
+          <div class="kv"><div class="k">processed (blk/min)</div><div class="v" id="vProcessed">—</div></div>
+          <div class="kv"><div class="k">sealed (blk/min)</div><div class="v" id="vSealed">—</div></div>
         </div>
         <div class="activity-controls">
           <div class="node-ctrls" id="chartControls">
@@ -219,6 +219,12 @@ const mkLine = (ctx, label, data, labels) => {
 
 let charts = {};
 const chartModes = {};
+const RATE_PER_MIN_SCALE = 60;
+const activitySeriesLabels = {
+  mined: 'Mined (blk/min)',
+  processed: 'Processed (blk/min)',
+  sealed: 'Sealed (blk/min)',
+};
 const baseChartLabels = { peers: 'Peers', latency: 'RPC Latency (ms)' };
 
 const legendOffsetPlugin = {
@@ -535,9 +541,16 @@ function updateHeightChart(labels, localSeries, remoteSeries){
 function renderActivityValue(minedSeries, processedSeries, sealedSeries){
   const chart = charts.activity;
   if (!chart) return;
-  const tag = ensureChartTag(chart, 'Activity');
+  const tag = ensureChartTag(chart, 'Activity (blk/min)');
   if (!tag) return;
-  const pickLatest = arr => (Array.isArray(arr) && arr.length) ? arr[arr.length-1] : null;
+  const pickLatest = arr => {
+    if (!Array.isArray(arr)) return null;
+    for (let i = arr.length - 1; i >= 0; i--){
+      const val = arr[i];
+      if (Number.isFinite(val)) return val;
+    }
+    return null;
+  };
   const minedLatest = pickLatest(minedSeries);
   const processedLatest = pickLatest(processedSeries);
   const sealedLatest = pickLatest(sealedSeries);
@@ -614,12 +627,12 @@ async function refreshStatus(){
       lastSeenEl.textContent = Number.isFinite(ts) ? fmtTime(ts) : '—';
     }
     const actSrc = (j.node_state && j.node_state.activity) || j.activity || {};
-    const mined = extractRate(actSrc.mined);
-    const processed = extractRate(actSrc.processed);
-    const sealed = extractRate(actSrc.sealed);
-    document.getElementById('vMined').textContent     = mined.toFixed(2);
-    document.getElementById('vProcessed').textContent = processed.toFixed(2);
-    document.getElementById('vSealed').textContent    = sealed.toFixed(2);
+    const minedPerMin = extractRate(actSrc.mined) * RATE_PER_MIN_SCALE;
+    const processedPerMin = extractRate(actSrc.processed) * RATE_PER_MIN_SCALE;
+    const sealedPerMin = extractRate(actSrc.sealed) * RATE_PER_MIN_SCALE;
+    document.getElementById('vMined').textContent     = formatValueDisplay(minedPerMin);
+    document.getElementById('vProcessed').textContent = formatValueDisplay(processedPerMin);
+    document.getElementById('vSealed').textContent    = formatValueDisplay(sealedPerMin);
     const uptimeEl = document.getElementById('vUptime');
     if (uptimeEl){
       const uptime = Number(j.node_state?.uptime_sec ?? j.uptime_sec ?? j.uptime ?? 0);
@@ -693,9 +706,13 @@ async function refreshCharts(){
   }
   if (a){
     const labels = Array.isArray(a.labels) ? a.labels : [];
-    const minedSeries = Array.isArray(a.mined) ? a.mined : [];
-    const processedSeries = Array.isArray(a.processed) ? a.processed : [];
-    const sealedSeries = Array.isArray(a.sealed) ? a.sealed : [];
+    const toPerMinSeries = arr => (Array.isArray(arr) ? arr.map(v => {
+      const num = Number(v);
+      return Number.isFinite(num) ? num * RATE_PER_MIN_SCALE : null;
+    }) : []);
+    const minedSeries = toPerMinSeries(a.mined);
+    const processedSeries = toPerMinSeries(a.processed);
+    const sealedSeries = toPerMinSeries(a.sealed);
     const ctx = document.getElementById('activityChart')?.getContext('2d');
     if (ctx){
       if (!charts.activity){
@@ -704,9 +721,9 @@ async function refreshCharts(){
           data:{
             labels,
             datasets:[
-              { label:'Mined', data:minedSeries, fill:false, tension:0.25, pointRadius:0, borderWidth:2 },
-              { label:'Processed', data:processedSeries, fill:false, tension:0.25, pointRadius:0, borderWidth:2 },
-              { label:'Sealed', data:sealedSeries, fill:false, tension:0.25, pointRadius:0, borderWidth:2 },
+              { label:activitySeriesLabels.mined, data:minedSeries, fill:false, tension:0.25, pointRadius:0, borderWidth:2 },
+              { label:activitySeriesLabels.processed, data:processedSeries, fill:false, tension:0.25, pointRadius:0, borderWidth:2 },
+              { label:activitySeriesLabels.sealed, data:sealedSeries, fill:false, tension:0.25, pointRadius:0, borderWidth:2 },
             ]
           },
           options:{
@@ -718,8 +735,11 @@ async function refreshCharts(){
         charts.activity._valueTag = null;
       }else{
         charts.activity.data.labels = labels;
+        charts.activity.data.datasets[0].label = activitySeriesLabels.mined;
         charts.activity.data.datasets[0].data = minedSeries;
+        charts.activity.data.datasets[1].label = activitySeriesLabels.processed;
         charts.activity.data.datasets[1].data = processedSeries;
+        charts.activity.data.datasets[2].label = activitySeriesLabels.sealed;
         charts.activity.data.datasets[2].data = sealedSeries;
         charts.activity.update('none');
       }
@@ -727,7 +747,11 @@ async function refreshCharts(){
     }
   }else if (charts.activity){
     charts.activity.data.labels = [];
-    charts.activity.data.datasets.forEach(ds => { ds.data = []; });
+    const labelKeys = [activitySeriesLabels.mined, activitySeriesLabels.processed, activitySeriesLabels.sealed];
+    charts.activity.data.datasets.forEach((ds, idx) => {
+      ds.label = labelKeys[idx] || ds.label;
+      ds.data = [];
+    });
     charts.activity.update('none');
     renderActivityValue([], [], []);
   }
@@ -760,9 +784,13 @@ async function preloadHistory(){
 
     const actLabels = labelsFor('activity');
     if (actLabels.length){
-      const minedSeries = seriesFor('mined');
-      const processedSeries = seriesFor('processed');
-      const sealedSeries = seriesFor('sealed');
+      const perMinSeriesFor = key => seriesFor(key).map(v => {
+        const num = Number(v);
+        return Number.isFinite(num) ? num * RATE_PER_MIN_SCALE : null;
+      });
+      const minedSeries = perMinSeriesFor('mined');
+      const processedSeries = perMinSeriesFor('processed');
+      const sealedSeries = perMinSeriesFor('sealed');
       const ctx = document.getElementById('activityChart')?.getContext('2d');
       if (ctx){
         if (!charts.activity){
@@ -771,9 +799,9 @@ async function preloadHistory(){
             data:{
               labels: actLabels,
               datasets:[
-                { label:'Mined', data:minedSeries, fill:false, tension:0.25, pointRadius:0, borderWidth:2 },
-                { label:'Processed', data:processedSeries, fill:false, tension:0.25, pointRadius:0, borderWidth:2 },
-                { label:'Sealed', data:sealedSeries, fill:false, tension:0.25, pointRadius:0, borderWidth:2 },
+                { label:activitySeriesLabels.mined, data:minedSeries, fill:false, tension:0.25, pointRadius:0, borderWidth:2 },
+                { label:activitySeriesLabels.processed, data:processedSeries, fill:false, tension:0.25, pointRadius:0, borderWidth:2 },
+                { label:activitySeriesLabels.sealed, data:sealedSeries, fill:false, tension:0.25, pointRadius:0, borderWidth:2 },
               ]
             },
             options:{
@@ -785,8 +813,11 @@ async function preloadHistory(){
           charts.activity._valueTag = null;
         }else{
           charts.activity.data.labels = actLabels;
+          charts.activity.data.datasets[0].label = activitySeriesLabels.mined;
           charts.activity.data.datasets[0].data = minedSeries;
+          charts.activity.data.datasets[1].label = activitySeriesLabels.processed;
           charts.activity.data.datasets[1].data = processedSeries;
+          charts.activity.data.datasets[2].label = activitySeriesLabels.sealed;
           charts.activity.data.datasets[2].data = sealedSeries;
           charts.activity.update('none');
         }

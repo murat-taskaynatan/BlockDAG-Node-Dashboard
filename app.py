@@ -451,11 +451,13 @@ def _update_node_state(sample: dict):
             secs = max(int(since_progress_ms / 1000), 1)
             state = _state("stalled", "Stalled", "#ff5370", f"No height change {secs}s")
         elif mined >= MINING_RATE_THRESHOLD:
-            state = _state("mining", "Mining", "#25d366", f"{mined:.2f} blk/s mined")
+            mined_per_min = mined * 60.0
+            state = _state("mining", "Mining", "#25d366", f"{mined_per_min:.2f} blk/min mined")
         elif max(height_rate, 0.0) >= SYNC_RATE_THRESHOLD:
             state = _state("syncing", "Syncing", "#ffa726", f"{height_rate:.2f} blk/s")
         elif max(processed, sealed, activity_total) >= DOWNLOAD_RATE_THRESHOLD:
-            state = _state("downloading", "Downloading Blocks", "#ffb74d", f"{activity_total:.2f} blk/s processed")
+            total_per_min = activity_total * 60.0
+            state = _state("downloading", "Downloading Blocks", "#ffb74d", f"{total_per_min:.2f} blk/min processed")
         else:
             detail = f"{height_rate:.2f} blk/s" if height_rate > 0 else ""
             state = _state("steady", "Healthy", "#25d366" if ok else "#9aa4c7", detail)
