@@ -11,7 +11,7 @@ Environment=HOST=0.0.0.0
 Environment=PORT=8080
 EnvironmentFile=-/etc/blockdag-dashboard/dashboard.env
 Environment=PYTHONPATH=/opt/blockdag-dashboard
-Environment=PYTHONWARNINGS=ignore:Unverified HTTPS request
+Environment="PYTHONWARNINGS=ignore:Unverified HTTPS request"
 ExecStart=/opt/blockdag-dashboard/.venv/bin/waitress-serve --listen=${HOST}:${PORT} app:app
 Restart=on-failure
 RestartSec=5

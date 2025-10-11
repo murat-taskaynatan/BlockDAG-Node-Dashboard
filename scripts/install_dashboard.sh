@@ -15,16 +15,16 @@ sudo chown "$USER":"$USER" "$REPO_DIR"
 printf "[2/6] Syncing dashboard files...\n"
 rsync -a --delete "$(pwd)/" "$REPO_DIR/"
 
-printf "[3/6] Installing Python requirements (if requirements.txt exists)...\n"
+printf "[3/6] Installing Python dependencies...\n"
+python3 -m venv "$REPO_DIR/.venv"
+source "$REPO_DIR/.venv/bin/activate"
+pip install --upgrade pip
 if [[ -f "$REPO_DIR/requirements.txt" ]]; then
-  python3 -m venv "$REPO_DIR/.venv"
-  source "$REPO_DIR/.venv/bin/activate"
-  pip install --upgrade pip
   pip install -r "$REPO_DIR/requirements.txt"
-  deactivate
 else
-  printf "No requirements.txt found, skipping Python dependency install.\n"
+  pip install flask requests waitress
 fi
+deactivate
 
 printf "[4/6] Installing dashboard systemd service...\n"
 if [[ -f "$REPO_DIR/scripts/$SERVICE_NAME" ]]; then
