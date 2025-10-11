@@ -426,16 +426,72 @@ def get_peer_count():
         return base
     try:
         peer_info = rpc_call("bdag_getPeerInfo", [])
+        peer_list = []
+        count_candidates = []
         if isinstance(peer_info, list):
+            peer_list = peer_info
+        elif isinstance(peer_info, dict):
+            for key in ("active", "activeCount", "connected", "connections",
+                        "count", "numPeers", "total", "peersCount"):
+                if key in peer_info:
+                    count_candidates.append(peer_info.get(key))
+            peers_field = peer_info.get("peers")
+            if isinstance(peers_field, list):
+                peer_list = peers_field
+            else:
+                peer_list = [peer_info]
+        else:
+            peer_list = []
+
+        if count_candidates:
+            for candidate in count_candidates:
+                try:
+                    if isinstance(candidate, str) and candidate.strip().lower().startswith("0x"):
+                        cand_val = int(candidate, 16)
+                    else:
+                        cand_val = int(candidate)
+                    if cand_val >= 0:
+                        return cand_val
+                except Exception:
+                    continue
+
+        if peer_list:
             active = 0
-            for peer in peer_info:
+            for peer in peer_list:
                 if isinstance(peer, dict):
-                    if peer.get("active") is True or peer.get("state") is True:
+                    flags = (
+                        peer.get("active"),
+                        peer.get("state"),
+                        peer.get("connected"),
+                        peer.get("isActive"),
+                        peer.get("is_connected"),
+                        peer.get("status"),
+                    )
+                    counted = False
+                    for flag in flags:
+                        if isinstance(flag, bool):
+                            if flag:
+                                active += 1
+                                counted = True
+                                break
+                        elif isinstance(flag, (int, float)):
+                            if flag > 0:
+                                active += 1
+                                counted = True
+                                break
+                        elif isinstance(flag, str):
+                            val = flag.strip().lower()
+                            if val in ("true","1","connected","active","running","online","up","ok"):
+                                active += 1
+                                counted = True
+                                break
+                    if not counted:
+                        # treat any dict entry as connected if no explicit flag exists
                         active += 1
                 else:
                     active += 1
             if active <= 0:
-                active = len(peer_info)
+                active = len(peer_list)
             if active >= 0:
                 return int(active)
     except Exception:
@@ -1200,20 +1256,104 @@ def get_chain_height_fallback():
 # ---- END: height-from-logs fallback ----
 
 # ---- BEGIN: height file fallback helpers ----
-def _height_from_file(path="/run/bdag/head.json"):
+_SIDECAR_PATH_CACHE = {"paths": None, "resolved": None}
+
+
+def _sidecar_candidate_paths(path_hint=None):
+    import os
+    if path_hint:
+        hints = path_hint if isinstance(path_hint, (list, tuple)) else [path_hint]
+        paths = []
+        for raw in hints:
+            if not raw:
+                continue
+            raw = str(raw).strip()
+            if not raw:
+                continue
+            cand = raw if raw.endswith(".json") else os.path.join(raw, "head.json")
+            if cand not in paths:
+                paths.append(cand)
+        return paths
+
+    cache = _SIDECAR_PATH_CACHE
+    if cache.get("paths") is not None:
+        return list(cache["paths"])
+
+    paths = []
+    env_keys = (
+        "BDAG_SIDECAR_PATH",
+        "BDAG_SIDE_STATUS_PATH",
+        "BDAG_HEAD_JSON",
+        "BDAG_HEAD_PATH",
+    )
+    for key in env_keys:
+        raw = os.getenv(key, "").strip()
+        if not raw:
+            continue
+        candidates = [raw] if raw.endswith(".json") else [os.path.join(raw, "head.json")]
+        for cand in candidates:
+            if cand and cand not in paths:
+                paths.append(cand)
+
+    default_candidates = (
+        "/run/bdag/head.json",
+        "/var/run/bdag/head.json",
+        "/run/bdag-mini-dashboard/head.json",
+        "/var/run/bdag-mini-dashboard/head.json",
+        "/run/bdag-mini-dashbaord/head.json",
+        "/var/run/bdag-mini-dashbaord/head.json",
+    )
+    for cand in default_candidates:
+        if cand not in paths:
+            paths.append(cand)
+
+    cache["paths"] = tuple(paths)
+    return list(paths)
+
+
+def _load_sidecar_json(path_override=None):
+    import json, os
+    cache = _SIDECAR_PATH_CACHE
+    candidates = _sidecar_candidate_paths(path_override)
+    if not path_override:
+        resolved = cache.get("resolved")
+        if resolved and resolved in candidates:
+            candidates = [resolved] + [c for c in candidates if c != resolved]
+
+    for candidate in candidates:
+        if not candidate:
+            continue
+        try:
+            if os.path.exists(candidate):
+                with open(candidate, "r") as f:
+                    data = json.load(f)
+                if not path_override:
+                    cache["resolved"] = candidate
+                return data
+        except Exception:
+            continue
+    return {}
+
+
+def _height_from_file(path=None):
     try:
-        import json, os
-        if os.path.exists(path):
-            with open(path, "r") as f:
-                j = json.load(f)
-            return int((j.get("height") or 0))
+        if path:
+            paths = _sidecar_candidate_paths(path)
+        else:
+            paths = _sidecar_candidate_paths()
+        for cand in paths:
+            data = _load_sidecar_json(cand)
+            if data:
+                return int(data.get("height") or 0)
     except Exception:
         pass
     return 0
 
+
 def get_chain_height_fallback():
     h = _height_from_file()
     return h if h else 0
+
 
 def height_or_fb(h):
     try:
@@ -1299,15 +1439,11 @@ def _fix_status_height(resp):
 # ---- END: /api/status height fixer hook ----
 
 # ---- BEGIN: /api/status peers fixer (uses sidecar) ----
-def _status_from_file(path="/run/bdag/head.json"):
+def _status_from_file(path=None):
     try:
-        import json, os
-        if os.path.exists(path):
-            with open(path, "r") as f:
-                return json.load(f)
+        return _load_sidecar_json(path)
     except Exception:
-        pass
-    return {}
+        return {}
 
 # Reuse existing hook; if missing, this defines it; if present, it augments it.
 try:
@@ -1349,15 +1485,11 @@ def _fix_status_height_and_peers(resp):
 # ---- END: /api/status peers fixer ----
 
 # ---- BEGIN: /api/status activity injector (from sidecar) ----
-def _sidecar_json(path="/run/bdag/head.json"):
+def _sidecar_json(path=None):
     try:
-        import json, os
-        if os.path.exists(path):
-            with open(path, "r") as f:
-                return json.load(f)
+        return _load_sidecar_json(path)
     except Exception:
-        pass
-    return {}
+        return {}
 
 def _merge_activity(dst):
     side = _sidecar_json()

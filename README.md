@@ -36,6 +36,8 @@ To install system-wide (requires sudo):
 
 The `install_dashboard.sh` script syncs the repo to `/opt/blockdag-dashboard`, installs dependencies, and optionally registers a `blockdag-dashboard.service` systemd unit (if provided).
 
+During installation the helper script `bdag_sidecar.py` is installed to `/usr/local/bin` along with a `bdag-sidecar.timer` that keeps legacy `head.json` status files populated (peers, activity rates, etc.), ensuring the dashboard fallbacks stay accurate.
+
 Alternatively, install directly from GitHub (no manual clone required):
 
 ```bash

@@ -1,0 +1,11 @@
+[Unit]
+Description=BlockDAG sidecar status writer timer
+
+[Timer]
+OnBootSec=5
+OnUnitActiveSec=10
+AccuracySec=1
+Unit=bdag-sidecar.service
+
+[Install]
+WantedBy=timers.target

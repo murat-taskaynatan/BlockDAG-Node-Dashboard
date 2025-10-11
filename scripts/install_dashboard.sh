@@ -4,15 +4,18 @@ set -euo pipefail
 REPO_DIR="/opt/blockdag-dashboard"
 SERVICE_NAME="blockdag-dashboard.service"
 SYSTEMD_DIR="/etc/systemd/system"
+SIDECAR_SCRIPT="bdag_sidecar.py"
+SIDECAR_SERVICE="bdag-sidecar.service"
+SIDECAR_TIMER="bdag-sidecar.timer"
 
-printf "[1/5] Preparing install directories...\n"
+printf "[1/6] Preparing install directories...\n"
 sudo mkdir -p "$REPO_DIR"
 sudo chown "$USER":"$USER" "$REPO_DIR"
 
-printf "[2/5] Syncing dashboard files...\n"
+printf "[2/6] Syncing dashboard files...\n"
 rsync -a --delete "$(pwd)/" "$REPO_DIR/"
 
-printf "[3/5] Installing Python requirements (if requirements.txt exists)...\n"
+printf "[3/6] Installing Python requirements (if requirements.txt exists)...\n"
 if [[ -f "$REPO_DIR/requirements.txt" ]]; then
   python3 -m venv "$REPO_DIR/.venv"
   source "$REPO_DIR/.venv/bin/activate"
@@ -23,7 +26,7 @@ else
   printf "No requirements.txt found, skipping Python dependency install.\n"
 fi
 
-printf "[4/5] Installing systemd service...\n"
+printf "[4/6] Installing dashboard systemd service...\n"
 if [[ -f "$REPO_DIR/scripts/$SERVICE_NAME" ]]; then
   sudo cp "$REPO_DIR/scripts/$SERVICE_NAME" "$SYSTEMD_DIR/$SERVICE_NAME"
   sudo systemctl daemon-reload
@@ -32,7 +35,28 @@ else
   printf "Warning: service file scripts/%s not found; skipping systemd setup.\n" "$SERVICE_NAME"
 fi
 
-printf "[5/5] Installation complete.\n"
+printf "[5/6] Installing sidecar helper...\n"
+if [[ -f "$REPO_DIR/scripts/$SIDECAR_SCRIPT" ]]; then
+  sudo install -m 0755 "$REPO_DIR/scripts/$SIDECAR_SCRIPT" "/usr/local/bin/$SIDECAR_SCRIPT"
+else
+  printf "Warning: sidecar script scripts/%s not found; skipping install.\n" "$SIDECAR_SCRIPT"
+fi
+if [[ -f "$REPO_DIR/scripts/$SIDECAR_SERVICE" ]]; then
+  sudo install -m 0644 "$REPO_DIR/scripts/$SIDECAR_SERVICE" "$SYSTEMD_DIR/$SIDECAR_SERVICE"
+else
+  printf "Warning: sidecar service file scripts/%s not found.\n" "$SIDECAR_SERVICE"
+fi
+if [[ -f "$REPO_DIR/scripts/$SIDECAR_TIMER" ]]; then
+  sudo install -m 0644 "$REPO_DIR/scripts/$SIDECAR_TIMER" "$SYSTEMD_DIR/$SIDECAR_TIMER"
+else
+  printf "Warning: sidecar timer file scripts/%s not found.\n" "$SIDECAR_TIMER"
+fi
+sudo systemctl daemon-reload
+if systemctl list-unit-files | grep -q "^$SIDECAR_TIMER"; then
+  sudo systemctl enable --now "$SIDECAR_TIMER"
+fi
+
+printf "[6/6] Installation complete.\n"
 printf "Dashboard files: %s\n" "$REPO_DIR"
 if systemctl list-units --type=service | grep -q "$SERVICE_NAME"; then
   systemctl status "$SERVICE_NAME"

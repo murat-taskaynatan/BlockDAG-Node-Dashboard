@@ -1,0 +1,10 @@
+[Unit]
+Description=BlockDAG sidecar status writer
+After=network-online.target blockdag-dashboard.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/bdag_sidecar.py
+User=root
+Group=root
