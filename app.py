@@ -42,6 +42,21 @@ activity_mined     = deque(maxlen=WINDOW)
 activity_processed = deque(maxlen=WINDOW)
 activity_sealed    = deque(maxlen=WINDOW)
 
+def _activity_totals_state():
+    return globals().setdefault("_ACTIVITY_TOTALS", {
+        "mined": 0.0,
+        "processed": 0.0,
+        "sealed": 0.0,
+    })
+
+def _activity_totals_snapshot():
+    totals = _activity_totals_state()
+    return {
+        "mined": float(totals.get("mined", 0.0) or 0.0),
+        "processed": float(totals.get("processed", 0.0) or 0.0),
+        "sealed": float(totals.get("sealed", 0.0) or 0.0),
+    }
+
 lock = threading.Lock()
 
 HISTORY_POINTS = int(os.getenv("BDAG_HISTORY_POINTS", "720"))
@@ -147,6 +162,12 @@ def _node_state_store():
             "processed": 0.0,
             "sealed": 0.0,
             "total": 0.0,
+            "totals": {
+                "mined": 0.0,
+                "processed": 0.0,
+                "sealed": 0.0,
+                "sum": 0.0,
+            },
         },
         "height": 0.0,
         "peers": 0,
@@ -396,6 +417,16 @@ def _update_node_state(sample: dict):
     processed = max(_finite(activity.get("processed"), 0.0), 0.0)
     sealed = max(_finite(activity.get("sealed"), 0.0), 0.0)
     activity_total = max(_finite(mined + processed + sealed, 0.0), 0.0)
+    totals_raw = activity.get("totals")
+    totals_data = totals_raw if isinstance(totals_raw, dict) else {}
+    mined_total = max(_finite(totals_data.get("mined"), 0.0), 0.0)
+    processed_total = max(_finite(totals_data.get("processed"), 0.0), 0.0)
+    sealed_total = max(_finite(totals_data.get("sealed"), 0.0), 0.0)
+    if "sum" in totals_data:
+        total_sum_raw = totals_data.get("sum")
+    else:
+        total_sum_raw = mined_total + processed_total + sealed_total
+    activity_total_count = max(_finite(total_sum_raw, 0.0), 0.0)
 
     last_height = cache.get("last_height")
     last_ts = cache.get("last_ts")
@@ -428,6 +459,12 @@ def _update_node_state(sample: dict):
             "processed": processed,
             "sealed": sealed,
             "total": activity_total,
+            "totals": {
+                "mined": mined_total,
+                "processed": processed_total,
+                "sealed": sealed_total,
+                "sum": activity_total_count,
+            },
         }
         payload["height"] = height
         payload["peers"] = peers
@@ -481,6 +518,12 @@ def _current_node_state():
                 "processed": 0.0,
                 "sealed": 0.0,
                 "total": 0.0,
+                "totals": {
+                    "mined": 0.0,
+                    "processed": 0.0,
+                    "sealed": 0.0,
+                    "sum": 0.0,
+                },
             },
             "height": 0.0,
             "peers": 0,
@@ -551,16 +594,41 @@ def sample_once():
             remote_height_val = int(max(_finite(remote_height_raw, 0.0), 0.0))
     except Exception:
         remote_height_val = None
+    totals_snapshot = None
     with lock:
         height_series.append((now_ms, safe_height))
         remote_height_series.append((now_ms, remote_height_val if remote_height_val is not None else None))
         peers_series.append((now_ms, safe_peers))
         lat_series.append((now_ms, safe_latency))
-        if mined_val or processed_val or sealed_val:
+        totals = _activity_totals_state()
+        last_totals_ts = globals().get("_ACTIVITY_TOTALS_LAST_TS")
+        if last_totals_ts is None:
+            dt_sec = float(max(SAMPLE_SEC, 1))
+        else:
+            dt_sec = max((now_ms - last_totals_ts) / 1000.0, 0.0)
+        inc_mined = max(mined_val, 0.0) * max(dt_sec, 0.0)
+        inc_processed = max(processed_val, 0.0) * max(dt_sec, 0.0)
+        inc_sealed = max(sealed_val, 0.0) * max(dt_sec, 0.0)
+        totals["mined"] = max(_finite(totals.get("mined", 0.0) + inc_mined, 0.0), 0.0)
+        totals["processed"] = max(_finite(totals.get("processed", 0.0) + inc_processed, 0.0), 0.0)
+        totals["sealed"] = max(_finite(totals.get("sealed", 0.0) + inc_sealed, 0.0), 0.0)
+        totals_snapshot = {
+            "mined": float(totals.get("mined", 0.0) or 0.0),
+            "processed": float(totals.get("processed", 0.0) or 0.0),
+            "sealed": float(totals.get("sealed", 0.0) or 0.0),
+        }
+        globals()["_ACTIVITY_TOTALS_LAST_TS"] = now_ms
+        if inc_mined or inc_processed or inc_sealed or not activity_labels:
             activity_labels.append(now_ms)
-            activity_mined.append(mined_val)
-            activity_processed.append(processed_val)
-            activity_sealed.append(sealed_val)
+            activity_mined.append(totals_snapshot["mined"])
+            activity_processed.append(totals_snapshot["processed"])
+            activity_sealed.append(totals_snapshot["sealed"])
+    if totals_snapshot is None:
+        totals_snapshot = _activity_totals_snapshot()
+    activity_totals_sum = max(_finite(
+        totals_snapshot["mined"] + totals_snapshot["processed"] + totals_snapshot["sealed"],
+        0.0
+    ), 0.0)
     activity_total = max(_finite(mined_val + processed_val + sealed_val, 0.0), 0.0)
     node_uptime_sec = 0
     try:
@@ -571,7 +639,8 @@ def sample_once():
         node_uptime_sec = 0
     try:
         _history_push(now_ms, safe_height, safe_peers, safe_latency,
-                      mined_val, processed_val, sealed_val, activity_total, remote_height_val)
+                      totals_snapshot["mined"], totals_snapshot["processed"], totals_snapshot["sealed"],
+                      activity_totals_sum, remote_height_val)
     except Exception:
         pass
     sample_meta = {
@@ -586,6 +655,12 @@ def sample_once():
             "processed": processed_val,
             "sealed": sealed_val,
             "total": activity_total,
+            "totals": {
+                "mined": totals_snapshot["mined"],
+                "processed": totals_snapshot["processed"],
+                "sealed": totals_snapshot["sealed"],
+                "sum": activity_totals_sum,
+            },
         },
         "ts_ms": now_ms,
         "node_uptime_sec": node_uptime_sec,
@@ -827,15 +902,23 @@ def chart_push():
     now_ms = int(time.time()*1000)
     ensure_activity_defaults()
     with lock:
+        totals = _activity_totals_state()
+        mined_val = max(_finite(mined, 0.0), 0.0)
+        processed_val = max(_finite(processed, 0.0), 0.0)
+        sealed_val = max(_finite(sealed, 0.0), 0.0)
         activity_labels.append(now_ms)
         if mode == "abs":
-            activity_mined.append(mined)
-            activity_processed.append(processed)
-            activity_sealed.append(sealed)
+            totals["mined"] = mined_val
+            totals["processed"] = processed_val
+            totals["sealed"] = sealed_val
         else:
-            activity_mined.append((activity_mined[-1] if activity_mined else 0) + mined)
-            activity_processed.append((activity_processed[-1] if activity_processed else 0) + processed)
-            activity_sealed.append((activity_sealed[-1] if activity_sealed else 0) + sealed)
+            totals["mined"] = max(_finite(totals.get("mined", 0.0) + mined_val, 0.0), 0.0)
+            totals["processed"] = max(_finite(totals.get("processed", 0.0) + processed_val, 0.0), 0.0)
+            totals["sealed"] = max(_finite(totals.get("sealed", 0.0) + sealed_val, 0.0), 0.0)
+        activity_mined.append(float(totals["mined"]))
+        activity_processed.append(float(totals["processed"]))
+        activity_sealed.append(float(totals["sealed"]))
+        globals()["_ACTIVITY_TOTALS_LAST_TS"] = now_ms
     return jsonify({"ok": True})
 
 # ----- Controls -----
@@ -897,6 +980,11 @@ def api_control():
             activity_mined.clear()
             activity_processed.clear()
             activity_sealed.clear()
+            totals = _activity_totals_state()
+            totals["mined"] = 0.0
+            totals["processed"] = 0.0
+            totals["sealed"] = 0.0
+            globals()["_ACTIVITY_TOTALS_LAST_TS"] = None
         ensure_activity_defaults()
         return jsonify({"ok": True})
     elif action == "set_window":
@@ -1351,9 +1439,31 @@ try:
                 remote = None
         peers   = float(payload.get("peers") or payload.get("peer_count") or 0)
         latency = float(payload.get("rpc_latency_ms") or payload.get("latency_ms") or 0)
-        mined     = float((a.get("mined")     or {}).get("rate_per_s", a.get("mined", 0)) or 0)
-        processed = float((a.get("processed") or {}).get("rate_per_s", a.get("processed", 0)) or 0)
-        sealed    = float((a.get("sealed")    or {}).get("rate_per_s", a.get("sealed", 0)) or 0)
+        totals = a.get("totals") if isinstance(a.get("totals"), dict) else {}
+        def _pick_total(key):
+            if key in totals:
+                try:
+                    return float(totals.get(key) or 0)
+                except Exception:
+                    pass
+            v = a.get(key)
+            if isinstance(v, dict):
+                for candidate in ("total", "value", "count", "rate_per_s", "per_s_10s", "per_s_60s"):
+                    if candidate in v:
+                        try:
+                            value = v.get(candidate)
+                            if value is None:
+                                continue
+                            return float(value)
+                        except Exception:
+                            continue
+            try:
+                return float(v or 0)
+            except Exception:
+                return 0.0
+        mined     = _pick_total("mined")
+        processed = _pick_total("processed")
+        sealed    = _pick_total("sealed")
         activity  = max(mined + processed + sealed, 0.0)
         return height, remote, peers, latency, mined, processed, sealed, activity
 

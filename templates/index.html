@@ -93,9 +93,9 @@
       </div>
       <div class="activity-body">
         <div class="kvs activity-kvs">
-          <div class="kv"><div class="k">mined (blk/min)</div><div class="v" id="vMined">—</div></div>
-          <div class="kv"><div class="k">processed (blk/min)</div><div class="v" id="vProcessed">—</div></div>
-          <div class="kv"><div class="k">sealed (blk/min)</div><div class="v" id="vSealed">—</div></div>
+          <div class="kv"><div class="k">mined (total)</div><div class="v" id="vMined">—</div></div>
+          <div class="kv"><div class="k">processed (total)</div><div class="v" id="vProcessed">—</div></div>
+          <div class="kv"><div class="k">sealed (total)</div><div class="v" id="vSealed">—</div></div>
         </div>
         <div class="activity-controls">
           <div class="node-ctrls" id="chartControls">
@@ -219,11 +219,10 @@ const mkLine = (ctx, label, data, labels) => {
 
 let charts = {};
 const chartModes = {};
-const RATE_PER_MIN_SCALE = 60;
 const activitySeriesLabels = {
-  mined: 'Mined (blk/min)',
-  processed: 'Processed (blk/min)',
-  sealed: 'Sealed (blk/min)',
+  mined: 'Mined (total)',
+  processed: 'Processed (total)',
+  sealed: 'Sealed (total)',
 };
 const baseChartLabels = { peers: 'Peers', latency: 'RPC Latency (ms)' };
 
@@ -541,7 +540,7 @@ function updateHeightChart(labels, localSeries, remoteSeries){
 function renderActivityValue(minedSeries, processedSeries, sealedSeries){
   const chart = charts.activity;
   if (!chart) return;
-  const tag = ensureChartTag(chart, 'Activity (blk/min)');
+  const tag = ensureChartTag(chart, 'Activity (total)');
   if (!tag) return;
   const pickLatest = arr => {
     if (!Array.isArray(arr)) return null;
@@ -627,12 +626,17 @@ async function refreshStatus(){
       lastSeenEl.textContent = Number.isFinite(ts) ? fmtTime(ts) : '—';
     }
     const actSrc = (j.node_state && j.node_state.activity) || j.activity || {};
-    const minedPerMin = extractRate(actSrc.mined) * RATE_PER_MIN_SCALE;
-    const processedPerMin = extractRate(actSrc.processed) * RATE_PER_MIN_SCALE;
-    const sealedPerMin = extractRate(actSrc.sealed) * RATE_PER_MIN_SCALE;
-    document.getElementById('vMined').textContent     = formatValueDisplay(minedPerMin);
-    document.getElementById('vProcessed').textContent = formatValueDisplay(processedPerMin);
-    document.getElementById('vSealed').textContent    = formatValueDisplay(sealedPerMin);
+    const totalsSrc = (actSrc && typeof actSrc === 'object' && actSrc.totals) || {};
+    const minedTotal = Number(totalsSrc?.mined);
+    const processedTotal = Number(totalsSrc?.processed);
+    const sealedTotal = Number(totalsSrc?.sealed);
+    const minedDisplay = Number.isFinite(minedTotal) ? minedTotal : extractRate(actSrc.mined);
+    const processedDisplay = Number.isFinite(processedTotal) ? processedTotal : extractRate(actSrc.processed);
+    const sealedDisplay = Number.isFinite(sealedTotal) ? sealedTotal : extractRate(actSrc.sealed);
+    const fmtActivityValue = (val) => Number.isFinite(val) ? formatValueDisplay(val) : '—';
+    document.getElementById('vMined').textContent     = fmtActivityValue(minedDisplay);
+    document.getElementById('vProcessed').textContent = fmtActivityValue(processedDisplay);
+    document.getElementById('vSealed').textContent    = fmtActivityValue(sealedDisplay);
     const uptimeEl = document.getElementById('vUptime');
     if (uptimeEl){
       const uptime = Number(j.node_state?.uptime_sec ?? j.uptime_sec ?? j.uptime ?? 0);
@@ -706,13 +710,13 @@ async function refreshCharts(){
   }
   if (a){
     const labels = Array.isArray(a.labels) ? a.labels : [];
-    const toPerMinSeries = arr => (Array.isArray(arr) ? arr.map(v => {
+    const toSeries = arr => (Array.isArray(arr) ? arr.map(v => {
       const num = Number(v);
-      return Number.isFinite(num) ? num * RATE_PER_MIN_SCALE : null;
+      return Number.isFinite(num) ? num : null;
     }) : []);
-    const minedSeries = toPerMinSeries(a.mined);
-    const processedSeries = toPerMinSeries(a.processed);
-    const sealedSeries = toPerMinSeries(a.sealed);
+    const minedSeries = toSeries(a.mined);
+    const processedSeries = toSeries(a.processed);
+    const sealedSeries = toSeries(a.sealed);
     const ctx = document.getElementById('activityChart')?.getContext('2d');
     if (ctx){
       if (!charts.activity){
@@ -784,13 +788,13 @@ async function preloadHistory(){
 
     const actLabels = labelsFor('activity');
     if (actLabels.length){
-      const perMinSeriesFor = key => seriesFor(key).map(v => {
+      const toSeriesFor = key => seriesFor(key).map(v => {
         const num = Number(v);
-        return Number.isFinite(num) ? num * RATE_PER_MIN_SCALE : null;
+        return Number.isFinite(num) ? num : null;
       });
-      const minedSeries = perMinSeriesFor('mined');
-      const processedSeries = perMinSeriesFor('processed');
-      const sealedSeries = perMinSeriesFor('sealed');
+      const minedSeries = toSeriesFor('mined');
+      const processedSeries = toSeriesFor('processed');
+      const sealedSeries = toSeriesFor('sealed');
       const ctx = document.getElementById('activityChart')?.getContext('2d');
       if (ctx){
         if (!charts.activity){
