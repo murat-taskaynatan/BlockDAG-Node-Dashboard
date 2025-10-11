@@ -1,0 +1,21 @@
+[Unit]
+Description=BlockDAG Monitoring Dashboard
+Documentation=https://github.com/murat-taskaynatan/BlockDAG-Node-Dashboard
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/blockdag-dashboard
+Environment=HOST=0.0.0.0
+Environment=PORT=8080
+EnvironmentFile=-/etc/blockdag-dashboard/dashboard.env
+Environment=PYTHONPATH=/opt/blockdag-dashboard
+Environment=PYTHONWARNINGS=ignore:Unverified HTTPS request
+ExecStart=/opt/blockdag-dashboard/.venv/bin/waitress-serve --listen=${HOST}:${PORT} app:app
+Restart=on-failure
+RestartSec=5
+SyslogIdentifier=blockdag-dashboard
+
+[Install]
+WantedBy=multi-user.target
