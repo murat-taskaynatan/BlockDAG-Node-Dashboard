@@ -57,6 +57,51 @@ def _activity_totals_snapshot():
         "sealed": float(totals.get("sealed", 0.0) or 0.0),
     }
 
+def _activity_total_series_locked():
+    mined_list = list(activity_mined)
+    processed_list = list(activity_processed)
+    sealed_list = list(activity_sealed)
+    length = len(activity_labels)
+    totals = []
+    for idx in range(length):
+        mined_val = _finite(mined_list[idx] if idx < len(mined_list) else 0.0, 0.0)
+        processed_val = _finite(processed_list[idx] if idx < len(processed_list) else 0.0, 0.0)
+        sealed_val = _finite(sealed_list[idx] if idx < len(sealed_list) else 0.0, 0.0)
+        total_val = max(mined_val + processed_val + sealed_val, 0.0)
+        totals.append(float(total_val))
+    return totals
+
+def _rate_series_from(labels, values):
+    rates = []
+    prev_total = None
+    prev_ts = None
+    count = min(len(labels), len(values))
+    for idx in range(count):
+        ts_raw = labels[idx]
+        total_raw = values[idx]
+        try:
+            ts_val = int(ts_raw)
+        except Exception:
+            ts_val = None
+        total_val = _finite(total_raw, 0.0)
+        if ts_val is None or not math.isfinite(total_val):
+            rates.append(0.0)
+            continue
+        total_val = max(float(total_val), 0.0)
+        if prev_total is None or prev_ts is None or ts_val <= prev_ts:
+            rates.append(0.0)
+        else:
+            dt = max((ts_val - prev_ts) / 1000.0, 0.0)
+            delta = max(total_val - prev_total, 0.0)
+            rate_val = delta / dt if dt > 0 else 0.0
+            rates.append(max(_finite(rate_val, 0.0), 0.0))
+        prev_total = total_val
+        if ts_val is not None:
+            prev_ts = ts_val
+    if len(labels) > count:
+        rates.extend([0.0] * (len(labels) - count))
+    return [float(r) if isinstance(r, (int, float)) else 0.0 for r in rates]
+
 lock = threading.Lock()
 
 HISTORY_POINTS = int(os.getenv("BDAG_HISTORY_POINTS", "720"))
@@ -859,11 +904,22 @@ def chart_activity():
         hist_payload = {}
     labels = (hist_payload.get("activity") or {}).get("labels") or []
     if labels:
+        totals_raw = (hist_payload.get("activity") or {}).get("series") or []
+        totals = [max(_finite(totals_raw[idx], 0.0), 0.0) if idx < len(totals_raw) else 0.0 for idx in range(len(labels))]
+        activity_rate = _rate_series_from(labels, totals)
+        sync_raw = (hist_payload.get("height_dx") or {}).get("series") or []
+        if sync_raw:
+            sync_rate = [max(_finite(sync_raw[idx], 0.0), 0.0) if idx < len(sync_raw) else 0.0 for idx in range(len(labels))]
+        else:
+            height_series = (hist_payload.get("height_local") or {}).get("series") or []
+            sync_rate = _rate_series_from(labels, height_series)
         return jsonify({
             "labels": labels,
-            "mined": (hist_payload.get("mined") or {}).get("series") or [],
-            "processed": (hist_payload.get("processed") or {}).get("series") or [],
-            "sealed": (hist_payload.get("sealed") or {}).get("series") or [],
+            "activity_rate": activity_rate,
+            "sync_rate": sync_rate,
+            "rate": activity_rate,
+            "total": totals,
+            "height_dx": sync_rate,
             "len": len(labels)
         })
     hist = globals().get("_hist")
@@ -871,25 +927,46 @@ def chart_activity():
     if hist and hist_lock:
         with hist_lock:
             labels = [ts for ts,_ in hist.get("activity", [])]
-            mined = [v for _,v in hist.get("mined", [])]
-            processed = [v for _,v in hist.get("processed", [])]
-            sealed = [v for _,v in hist.get("sealed", [])]
+            total_series_raw = [v for _,v in hist.get("activity", [])]
+            height_dx_series = [v for _,v in hist.get("height_dx", [])]
+            height_local_series_raw = [v for _,v in hist.get("height_local", [])]
         if labels:
+            totals = [max(_finite(total_series_raw[idx], 0.0), 0.0) if idx < len(total_series_raw) else 0.0 for idx in range(len(labels))]
+            activity_rate = _rate_series_from(labels, totals)
+            if height_dx_series:
+                sync_rate = [max(_finite(height_dx_series[idx], 0.0), 0.0) if idx < len(height_dx_series) else 0.0 for idx in range(len(labels))]
+            else:
+                sync_rate = _rate_series_from(labels, [height_local_series_raw[idx] if idx < len(height_local_series_raw) else 0.0 for idx in range(len(labels))])
             return jsonify({
                 "labels": labels,
-                "mined": mined,
-                "processed": processed,
-                "sealed": sealed,
+                "activity_rate": activity_rate,
+                "sync_rate": sync_rate,
+                "rate": activity_rate,
+                "total": totals,
+                "height_dx": sync_rate,
                 "len": len(labels)
             })
     with lock:
-        return jsonify({
-            "labels": list(activity_labels),
-            "mined": list(activity_mined),
-            "processed": list(activity_processed),
-            "sealed": list(activity_sealed),
-            "len": len(activity_labels)
-        })
+        labels = list(activity_labels)
+        totals = _activity_total_series_locked()
+        height_points = list(height_series)
+    activity_rate = _rate_series_from(labels, totals)
+    height_rate_map = {}
+    if height_points:
+        height_labels = [ts for ts,_ in height_points]
+        height_values = [val for _,val in height_points]
+        height_rates = _rate_series_from(height_labels, height_values)
+        height_rate_map = {height_labels[idx]: height_rates[idx] for idx in range(len(height_labels))}
+    sync_rate = [max(_finite(height_rate_map.get(ts, 0.0), 0.0), 0.0) for ts in labels]
+    return jsonify({
+        "labels": labels,
+        "activity_rate": activity_rate,
+        "sync_rate": sync_rate,
+        "rate": activity_rate,
+        "total": totals,
+        "height_dx": sync_rate,
+        "len": len(labels)
+    })
 
 # Accept totals (inc or abs)
 @app.route("/api/chart/push", methods=["POST"])

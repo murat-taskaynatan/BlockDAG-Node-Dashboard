@@ -18,7 +18,7 @@
   .kv .k{color:var(--muted);font-size:12px}
   .kv .v{font-size:18px;margin-top:4px}
   canvas{width:100%;height:260px;background:rgba(0,0,0,.12);border-radius:12px;padding:8px}
-  .chart-value-tag{position:absolute;top:8px;right:12px;font-size:12px;color:var(--muted);background:rgba(0,0,0,.45);padding:2px 8px;border-radius:999px;font-variant-numeric:tabular-nums;pointer-events:none;white-space:nowrap}
+  .chart-value-tag{position:absolute;bottom:8px;right:12px;font-size:12px;color:var(--muted);background:rgba(0,0,0,.45);padding:2px 8px;border-radius:999px;font-variant-numeric:tabular-nums;pointer-events:none;white-space:nowrap}
   .pill{display:inline-block;border-radius:999px;padding:6px 14px;font-size:12px;background:rgba(255,255,255,.08);line-height:1;font-weight:600;transition:background .2s,color .2s}
   .stack{display:grid;grid-template-columns:1fr;gap:16px}
   .header{display:flex;align-items:center;gap:10px;justify-content:space-between;margin-bottom:16px;padding:0 8px;}
@@ -220,9 +220,8 @@ const mkLine = (ctx, label, data, labels) => {
 let charts = {};
 const chartModes = {};
 const activitySeriesLabels = {
-  mined: 'Mined (total)',
-  processed: 'Processed (total)',
-  sealed: 'Sealed (total)',
+  activity: 'Block Activity Rate (blk/s)',
+  sync: 'Sync Rate (blk/s)',
 };
 const baseChartLabels = { peers: 'Peers', latency: 'RPC Latency (ms)' };
 
@@ -343,6 +342,44 @@ function transformForMode(key, raw){
 function labelFor(key){
   const base = baseChartLabels[key] || 'Series';
   return chartModes[key] === 'delta' ? `${base} Δ` : base;
+}
+
+function alignSeriesLength(series, length){
+  const out = new Array(length);
+  const src = Array.isArray(series) ? series : [];
+  for (let i = 0; i < length; i++){
+    const num = Number(src[i]);
+    out[i] = Number.isFinite(num) ? num : null;
+  }
+  return out;
+}
+
+function deriveRateSeries(labels, totals){
+  const len = Math.min(Array.isArray(labels) ? labels.length : 0, Array.isArray(totals) ? totals.length : 0);
+  const rates = new Array(len);
+  let prevTotal = null;
+  let prevTs = null;
+  for (let i = 0; i < len; i++){
+    const ts = Number(labels[i]);
+    const total = Number(totals[i]);
+    if (!Number.isFinite(ts) || !Number.isFinite(total)){
+      rates[i] = null;
+      continue;
+    }
+    if (prevTotal === null || prevTs === null || ts <= prevTs){
+      rates[i] = 0;
+    } else {
+      const delta = Math.max(total - prevTotal, 0);
+      const dt = (ts - prevTs) / 1000;
+      rates[i] = dt > 0 ? delta / dt : 0;
+    }
+    prevTotal = total;
+    prevTs = ts;
+  }
+  while (rates.length < (Array.isArray(labels) ? labels.length : 0)){
+    rates.push(null);
+  }
+  return rates;
 }
 
 function updateLineChart(key, labels, rawData){
@@ -537,10 +574,10 @@ function updateHeightChart(labels, localSeries, remoteSeries){
   renderHeightValue(localData, remoteData);
 }
 
-function renderActivityValue(minedSeries, processedSeries, sealedSeries){
+function renderActivityValue(activitySeries, syncSeries){
   const chart = charts.activity;
   if (!chart) return;
-  const tag = ensureChartTag(chart, 'Activity (total)');
+  const tag = ensureChartTag(chart, `${activitySeriesLabels.activity} · ${activitySeriesLabels.sync}`);
   if (!tag) return;
   const pickLatest = arr => {
     if (!Array.isArray(arr)) return null;
@@ -550,10 +587,10 @@ function renderActivityValue(minedSeries, processedSeries, sealedSeries){
     }
     return null;
   };
-  const minedLatest = pickLatest(minedSeries);
-  const processedLatest = pickLatest(processedSeries);
-  const sealedLatest = pickLatest(sealedSeries);
-  tag.textContent = `M ${formatValueDisplay(minedLatest)} · P ${formatValueDisplay(processedLatest)} · S ${formatValueDisplay(sealedLatest)}`;
+  const activityLatest = pickLatest(activitySeries);
+  const syncLatest = pickLatest(syncSeries);
+  const fmt = val => Number.isFinite(val) ? `${formatValueDisplay(val)} blk/s` : '—';
+  tag.textContent = `Activity ${fmt(activityLatest)} · Sync ${fmt(syncLatest)}`;
 }
 
 function fmtTime(ms){
@@ -710,24 +747,33 @@ async function refreshCharts(){
   }
   if (a){
     const labels = Array.isArray(a.labels) ? a.labels : [];
-    const toSeries = arr => (Array.isArray(arr) ? arr.map(v => {
-      const num = Number(v);
-      return Number.isFinite(num) ? num : null;
-    }) : []);
-    const minedSeries = toSeries(a.mined);
-    const processedSeries = toSeries(a.processed);
-    const sealedSeries = toSeries(a.sealed);
+    const totalsFallback = Array.isArray(a.total) ? a.total : [];
+    const activityRateRaw = Array.isArray(a.activity_rate) ? a.activity_rate
+      : Array.isArray(a.rate) ? a.rate
+      : deriveRateSeries(labels, totalsFallback);
+    const syncRateRaw = Array.isArray(a.sync_rate) ? a.sync_rate
+      : Array.isArray(a.height_dx) ? a.height_dx
+      : [];
+    const activityRateSeries = alignSeriesLength(activityRateRaw, labels.length);
+    let syncRateSeries = alignSeriesLength(syncRateRaw, labels.length);
+    if (!syncRateSeries.some(v => Number.isFinite(v))){
+      const heightSeries = Array.isArray(a.height_local) ? a.height_local : [];
+      syncRateSeries = alignSeriesLength(deriveRateSeries(labels, heightSeries), labels.length);
+    }
     const ctx = document.getElementById('activityChart')?.getContext('2d');
     if (ctx){
+      if (charts.activity && charts.activity.data.datasets.length !== 2){
+        try{ charts.activity.destroy(); }catch(_){}
+        charts.activity = null;
+      }
       if (!charts.activity){
         charts.activity = new Chart(ctx, {
           type:'line',
           data:{
             labels,
             datasets:[
-              { label:activitySeriesLabels.mined, data:minedSeries, fill:false, tension:0.25, pointRadius:0, borderWidth:2 },
-              { label:activitySeriesLabels.processed, data:processedSeries, fill:false, tension:0.25, pointRadius:0, borderWidth:2 },
-              { label:activitySeriesLabels.sealed, data:sealedSeries, fill:false, tension:0.25, pointRadius:0, borderWidth:2 },
+              { label:activitySeriesLabels.activity, data:activityRateSeries, fill:false, tension:0.25, pointRadius:0, borderWidth:2 },
+              { label:activitySeriesLabels.sync, data:syncRateSeries, fill:false, tension:0.25, pointRadius:0, borderWidth:2 },
             ]
           },
           options:{
@@ -739,25 +785,30 @@ async function refreshCharts(){
         charts.activity._valueTag = null;
       }else{
         charts.activity.data.labels = labels;
-        charts.activity.data.datasets[0].label = activitySeriesLabels.mined;
-        charts.activity.data.datasets[0].data = minedSeries;
-        charts.activity.data.datasets[1].label = activitySeriesLabels.processed;
-        charts.activity.data.datasets[1].data = processedSeries;
-        charts.activity.data.datasets[2].label = activitySeriesLabels.sealed;
-        charts.activity.data.datasets[2].data = sealedSeries;
+        charts.activity.data.datasets[0].label = activitySeriesLabels.activity;
+        charts.activity.data.datasets[0].data = activityRateSeries;
+        charts.activity.data.datasets[1].label = activitySeriesLabels.sync;
+        charts.activity.data.datasets[1].data = syncRateSeries;
         charts.activity.update('none');
       }
-      renderActivityValue(minedSeries, processedSeries, sealedSeries);
+      renderActivityValue(activityRateSeries, syncRateSeries);
     }
   }else if (charts.activity){
     charts.activity.data.labels = [];
-    const labelKeys = [activitySeriesLabels.mined, activitySeriesLabels.processed, activitySeriesLabels.sealed];
-    charts.activity.data.datasets.forEach((ds, idx) => {
-      ds.label = labelKeys[idx] || ds.label;
-      ds.data = [];
-    });
+    if (charts.activity.data.datasets.length){
+      const ds1 = charts.activity.data.datasets[0];
+      if (ds1){
+        ds1.label = activitySeriesLabels.activity;
+        ds1.data = [];
+      }
+      const ds2 = charts.activity.data.datasets[1];
+      if (ds2){
+        ds2.label = activitySeriesLabels.sync;
+        ds2.data = [];
+      }
+    }
     charts.activity.update('none');
-    renderActivityValue([], [], []);
+    renderActivityValue([], []);
   }
 }
 
@@ -788,24 +839,40 @@ async function preloadHistory(){
 
     const actLabels = labelsFor('activity');
     if (actLabels.length){
-      const toSeriesFor = key => seriesFor(key).map(v => {
+      const totals = seriesFor('activity').map(v => {
         const num = Number(v);
         return Number.isFinite(num) ? num : null;
       });
-      const minedSeries = toSeriesFor('mined');
-      const processedSeries = toSeriesFor('processed');
-      const sealedSeries = toSeriesFor('sealed');
+      const activityRateSeries = deriveRateSeries(actLabels, totals);
+      const syncRates = (() => {
+        const heightDxSeries = seriesFor('height_dx').map(v => {
+          const num = Number(v);
+          return Number.isFinite(num) ? num : null;
+        });
+        if (heightDxSeries.some(v => Number.isFinite(v))){
+          const aligned = alignSeriesLength(heightDxSeries, actLabels.length);
+          return aligned.map(v => Number.isFinite(v) ? Math.max(v, 0) : null);
+        }
+        const heightSeries = seriesFor('height_local').map(v => {
+          const num = Number(v);
+          return Number.isFinite(num) ? num : null;
+        });
+        return alignSeriesLength(deriveRateSeries(actLabels, heightSeries), actLabels.length);
+      })();
       const ctx = document.getElementById('activityChart')?.getContext('2d');
       if (ctx){
+        if (charts.activity && charts.activity.data.datasets.length !== 2){
+          try{ charts.activity.destroy(); }catch(_){}
+          charts.activity = null;
+        }
         if (!charts.activity){
           charts.activity = new Chart(ctx, {
             type:'line',
             data:{
               labels: actLabels,
               datasets:[
-                { label:activitySeriesLabels.mined, data:minedSeries, fill:false, tension:0.25, pointRadius:0, borderWidth:2 },
-                { label:activitySeriesLabels.processed, data:processedSeries, fill:false, tension:0.25, pointRadius:0, borderWidth:2 },
-                { label:activitySeriesLabels.sealed, data:sealedSeries, fill:false, tension:0.25, pointRadius:0, borderWidth:2 },
+                { label:activitySeriesLabels.activity, data:activityRateSeries, fill:false, tension:0.25, pointRadius:0, borderWidth:2 },
+                { label:activitySeriesLabels.sync, data:syncRates, fill:false, tension:0.25, pointRadius:0, borderWidth:2 },
               ]
             },
             options:{
@@ -817,15 +884,13 @@ async function preloadHistory(){
           charts.activity._valueTag = null;
         }else{
           charts.activity.data.labels = actLabels;
-          charts.activity.data.datasets[0].label = activitySeriesLabels.mined;
-          charts.activity.data.datasets[0].data = minedSeries;
-          charts.activity.data.datasets[1].label = activitySeriesLabels.processed;
-          charts.activity.data.datasets[1].data = processedSeries;
-          charts.activity.data.datasets[2].label = activitySeriesLabels.sealed;
-          charts.activity.data.datasets[2].data = sealedSeries;
+          charts.activity.data.datasets[0].label = activitySeriesLabels.activity;
+          charts.activity.data.datasets[0].data = activityRateSeries;
+          charts.activity.data.datasets[1].label = activitySeriesLabels.sync;
+          charts.activity.data.datasets[1].data = syncRates;
           charts.activity.update('none');
         }
-        renderActivityValue(minedSeries, processedSeries, sealedSeries);
+        renderActivityValue(activityRateSeries, syncRates);
       }
     }
   }catch(err){
