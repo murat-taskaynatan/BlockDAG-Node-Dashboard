@@ -2,11 +2,17 @@
 
 A Flask-based monitoring dashboard for BlockDAG nodes. The UI surfaces node health, peers, RPC latency, and block activity, plus live charts for peers, latency, and block throughput.
 
+<img width="1092" height="880" alt="image" src="https://github.com/user-attachments/assets/48c13745-44ca-4304-b9a0-0e1812e3ddcc" />
+
+
 ## Features
 - Real-time status pill with node state, peers, latency, and uptime.
 - Block activity dashboard with chart value badges highlighting the latest metrics.
 - Chart controls for sampling window and history length, with server-side buffering.
 - Dynamic Flask route `/api/status` and chart APIs powering the frontend.
+- Live log viewer with ANSI cleanup and auto-scroll to keep recent node activity visible.
+- Remote-height awareness that surfaces local vs remote deltas and ETA to full sync.
+- Mining state detection and health categorisation (steady, syncing, downloading, stalled, etc.).
 
  Recent Log View
  
@@ -29,6 +35,13 @@ To install system-wide (requires sudo):
 ```
 
 The `install_dashboard.sh` script syncs the repo to `/opt/blockdag-dashboard`, installs dependencies, and optionally registers a `blockdag-dashboard.service` systemd unit (if provided).
+
+Alternatively, install directly from GitHub (no manual clone required):
+
+```bash
+REPO_URL=https://github.com/murat-taskaynatan/BlockDAG-Node-Dashboard.git \
+./scripts/install_from_github.sh
+```
 
 ### Local Development
 
