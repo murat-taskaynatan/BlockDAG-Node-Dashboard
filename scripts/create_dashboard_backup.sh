@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+
 BACKUP_DIR="${BACKUP_DIR:-$HOME/backups}"
 TIMESTAMP="$(date +%Y%m%d-%H%M%S)"
 ARCHIVE_NAME="dashboard-backup-${TIMESTAMP}.tar.gz"
@@ -11,7 +14,7 @@ mkdir -p "${BACKUP_DIR}"
 
 echo "==> Creating archive at ${DEST}"
 sudo tar -czf "${DEST}" \
-  -C /home/blockdag bdag-mini-dashboard \
+  -C "${REPO_ROOT%/*}" "$(basename "${REPO_ROOT}")" \
   -C /etc/systemd/system blockdag-dashboard.service \
   blockdag-dashboard.service.d
 
