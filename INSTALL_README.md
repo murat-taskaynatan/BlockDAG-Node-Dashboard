@@ -77,7 +77,6 @@ REPO_BRANCH=main \
   ./scripts/install_from_github.sh
 ```
 
-
 ---
 
 ## 4. Post-Install Checklist
@@ -92,7 +91,6 @@ REPO_BRANCH=main \
    - Edit `/etc/blockdag-dashboard/dashboard.env` and set:
      ```
      BDAG_RPC_BASE=http://127.0.0.1:18545
-  
      ```
    - Restart after changes:
      ```bash
