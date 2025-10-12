@@ -45,16 +45,6 @@ REPO_URL=https://github.com/murat-taskaynatan/BlockDAG-Node-Dashboard.git \
 ./scripts/install_from_github.sh
 ```
 
-### Local Development
-
-```bash
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt  # if available
-export FLASK_APP=app.py
-flask run --host=0.0.0.0 --port=8080
-```
-
 ## Repository Layout
 - `app.py` – Flask application and sampler
 - `templates/index.html` – main dashboard template
