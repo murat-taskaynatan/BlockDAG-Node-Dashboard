@@ -77,9 +77,6 @@ REPO_BRANCH=main \
   ./scripts/install_from_github.sh
 ```
 
-> **Note:** The script defaults to `master`. Override `REPO_BRANCH=main` to match this repository’s primary branch.
-
-The rest of the workflow mirrors the local installer (venv setup, service install, sidecar helper).
 
 ---
 
