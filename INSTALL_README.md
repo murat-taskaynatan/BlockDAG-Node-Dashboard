@@ -92,8 +92,7 @@ REPO_BRANCH=main \
    - Edit `/etc/blockdag-dashboard/dashboard.env` and set:
      ```
      BDAG_RPC_BASE=http://127.0.0.1:18545
-     BDAG_RPC_USER=
-     BDAG_RPC_PASS=
+  
      ```
    - Restart after changes:
      ```bash
