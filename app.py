@@ -22,6 +22,10 @@ REMOTE_RPC_VERIFY = os.getenv("BDAG_REMOTE_RPC_VERIFY", "0") == "1"
 MINING_STATE_SYNC_CONTAINER = os.getenv("BDAG_NODE_CONTAINER", "blockdag-testnet-network").strip()
 MINING_STATE_SYNC_CACHE_SEC = float(os.getenv("BDAG_MINING_STATE_SYNC_CACHE_SEC", "10"))
 DOCKER_BIN = shutil.which("docker") or ("/usr/bin/docker" if os.path.exists("/usr/bin/docker") else None)
+SYSTEMCTL_BIN = shutil.which("systemctl") or ("/usr/bin/systemctl" if os.path.exists("/usr/bin/systemctl") else None)
+RESTART_INSTALLER = os.path.join(os.path.dirname(__file__), "scripts", "install_container_restart.sh")
+SYSTEMD_UNIT_DIR = "/etc/systemd/system"
+SYSTEMCTL_BIN = shutil.which("systemctl") or ("/usr/bin/systemctl" if os.path.exists("/usr/bin/systemctl") else None)
 SAMPLE_SEC = int(os.getenv("BDAG_SAMPLE_SEC", "5"))
 WINDOW = int(os.getenv("BDAG_WINDOW", "240"))  # points kept in memory
 ENABLE_CONTROL = os.getenv("DASH_ENABLE_CONTROL", "1") == "1"
@@ -30,6 +34,146 @@ STALL_THRESHOLD_MS = int(os.getenv("DASH_STALL_THRESHOLD_MS", "180000"))
 SYNC_RATE_THRESHOLD = float(os.getenv("DASH_SYNC_RATE_THRESHOLD", "0.3"))
 DOWNLOAD_RATE_THRESHOLD = float(os.getenv("DASH_DOWNLOAD_RATE_THRESHOLD", "1.0"))
 MINING_RATE_THRESHOLD = float(os.getenv("DASH_MINING_RATE_THRESHOLD", "0.1"))
+
+
+def _sanitize_unit_name(name):
+    raw = (name or "").strip().lower()
+    if not raw:
+        return "container"
+    cleaned = []
+    for ch in raw:
+        if ch.isalnum() or ch in "_.:-":
+            cleaned.append(ch)
+        else:
+            cleaned.append('-')
+    result = ''.join(cleaned).strip('-')
+    return result or "container"
+
+
+def _restart_unit_info(container):
+    base = f"{_sanitize_unit_name(container)}-container-restart"
+    service = f"{base}.service"
+    timer = f"{base}.timer"
+    service_path = os.path.join(SYSTEMD_UNIT_DIR, service)
+    timer_path = os.path.join(SYSTEMD_UNIT_DIR, timer)
+    return {
+        "base": base,
+        "service": service,
+        "timer": timer,
+        "service_path": service_path,
+        "timer_path": timer_path,
+    }
+
+
+def _read_timer_interval(timer_path):
+    if not os.path.exists(timer_path):
+        return None
+    try:
+        with open(timer_path, "r", encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                if line.startswith("OnUnitActiveSec="):
+                    return line.split("=", 1)[1].strip()
+    except Exception:
+        return None
+    return None
+
+
+def _interval_str_to_hours(interval):
+    if not interval:
+        return None
+    value = interval.strip().lower()
+    try:
+        if value.endswith("ms"):
+            return float(value[:-2]) / 3600000.0
+        if value.endswith("us"):
+            return float(value[:-2]) / 3600000000.0
+        if value.endswith("ns"):
+            return float(value[:-2]) / 3600000000000.0
+        if value.endswith("s"):
+            return float(value[:-1]) / 3600.0
+        if value.endswith("m"):
+            return float(value[:-1]) / 60.0
+        if value.endswith("h"):
+            return float(value[:-1])
+        if value.endswith("d"):
+            return float(value[:-1]) * 24.0
+        return float(value) / 3600.0
+    except Exception:
+        return None
+
+
+def _systemctl_cmd(args):
+    if not SYSTEMCTL_BIN:
+        return None
+    try:
+        return subprocess.run([SYSTEMCTL_BIN, *args], capture_output=True, text=True, check=False)
+    except Exception:
+        return None
+
+
+def _get_auto_restart_status(container):
+    info = _restart_unit_info(container)
+    installed = os.path.exists(info["timer_path"]) or os.path.exists(info["service_path"])
+    interval_raw = _read_timer_interval(info["timer_path"])
+    interval_hours = _interval_str_to_hours(interval_raw)
+    enabled = False
+    active = False
+    if SYSTEMCTL_BIN and installed:
+        res = _systemctl_cmd(["is-enabled", info["timer"]])
+        enabled = bool(res and res.returncode == 0)
+        res = _systemctl_cmd(["is-active", info["timer"]])
+        active = bool(res and res.returncode == 0)
+    return {
+        "installed": bool(installed),
+        "enabled": bool(enabled),
+        "active": bool(active),
+        "interval": interval_raw,
+        "interval_hours": interval_hours,
+        "service": info["service"],
+        "timer": info["timer"],
+    }
+
+
+def _format_hours_interval(hours):
+    value = max(float(hours), 1.0)
+    if abs(value - round(value)) < 1e-6:
+        return f"{int(round(value))}h"
+    # represent fractional hours as minutes
+    minutes = int(round(value * 60))
+    minutes = max(minutes, 1)
+    return f"{minutes}m"
+
+
+def _enable_auto_restart(container, hours):
+    if not os.path.exists(RESTART_INSTALLER):
+        raise RuntimeError("install_container_restart.sh not found")
+    if not os.access(RESTART_INSTALLER, os.X_OK):
+        raise RuntimeError("install_container_restart.sh is not executable")
+    interval = _format_hours_interval(hours)
+    cmd = [RESTART_INSTALLER, container, interval]
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        message = result.stderr.strip() or result.stdout.strip() or "failed to configure auto restart"
+        raise RuntimeError(message)
+    return result.stdout.strip()
+
+
+def _disable_auto_restart(container):
+    info = _restart_unit_info(container)
+    if SYSTEMCTL_BIN:
+        _systemctl_cmd(["disable", "--now", info["timer"]])
+        _systemctl_cmd(["disable", info["service"]])
+    for path in (info["timer_path"], info["service_path"]):
+        try:
+            if os.path.exists(path):
+                os.remove(path)
+        except Exception:
+            pass
+    if SYSTEMCTL_BIN:
+        _systemctl_cmd(["daemon-reload"])
 
 # ----- Series -----
 height_series = deque(maxlen=WINDOW)
@@ -1066,7 +1210,12 @@ def docker_list():
         items = []
         for line in out.strip().splitlines():
             name, status = (line.split("|",1)+[""])[:2]
-            items.append({"name":name, "status":status})
+            entry = {"name": name, "status": status}
+            try:
+                entry["auto_restart"] = _get_auto_restart_status(name)
+            except Exception:
+                entry["auto_restart"] = {"installed": False, "enabled": False, "active": False, "interval": None, "interval_hours": None}
+            items.append(entry)
         return items
     except Exception:
         return []
@@ -1104,6 +1253,33 @@ def api_control():
     if action in ("docker_start","docker_stop","docker_restart"):
         mapping = {"docker_start":"start","docker_stop":"stop","docker_restart":"restart"}
         return jsonify(docker_action(name, mapping[action]))
+    elif action == "auto_restart_enable":
+        if not name:
+            return jsonify({"ok": False, "error": "missing container name"}), 400
+        if not SYSTEMCTL_BIN:
+            return jsonify({"ok": False, "error": "systemctl not available on host"}), 400
+        try:
+            hours = float(body.get("hours", 0))
+        except Exception:
+            return jsonify({"ok": False, "error": "invalid hours value"}), 400
+        if hours <= 0:
+            return jsonify({"ok": False, "error": "auto restart hours must be positive"}), 400
+        try:
+            output = _enable_auto_restart(name, hours)
+        except Exception as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 400
+        message = output or f"Auto restart configured every {_format_hours_interval(hours)}"
+        return jsonify({"ok": True, "message": message})
+    elif action == "auto_restart_disable":
+        if not name:
+            return jsonify({"ok": False, "error": "missing container name"}), 400
+        if not SYSTEMCTL_BIN:
+            return jsonify({"ok": False, "error": "systemctl not available on host"}), 400
+        try:
+            _disable_auto_restart(name)
+        except Exception as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 400
+        return jsonify({"ok": True, "message": "Auto restart disabled"})
     elif action == "sample_now":
         ok, ht, *_ = sample_once()
         return jsonify({"ok": ok, "health_text": ht})

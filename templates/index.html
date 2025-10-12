@@ -94,10 +94,16 @@
             <option value="">Loading…</option>
           </select>
         </label>
+        <label>
+          <span>Auto restart (hrs)</span>
+          <input type="number" id="autoRestartHours" min="1" step="1" value="6">
+        </label>
+        <button class="btn" data-node-action="auto_enable" id="btnAutoRestartEnable" disabled>Apply Auto Restart</button>
+        <button class="btn" data-node-action="auto_disable" id="btnAutoRestartDisable" disabled>Disable Auto Restart</button>
         <button class="btn" data-node-action="restart" id="btnContainerRestart" disabled>Restart</button>
         <button class="btn" data-node-action="start" id="btnContainerStart" disabled>Start</button>
         <button class="btn" data-node-action="stop" id="btnContainerStop" disabled>Stop</button>
-        <span class="sp" id="nodeContainerDetails">—</span>
+        <span class="sp" id="nodeContainerDetails">Auto restart: —</span>
         <span class="sp" id="nodeControlStatus"></span>
       </div>
     </div>
@@ -248,6 +254,7 @@ const baseChartLabels = { peers: 'Peers', latency: 'RPC Latency (ms)' };
 const NODE_CTRL_REFRESH_MS = 10000;
 const nodeControlState = { enabled:false, containers:[], lastFetched:0 };
 let nodeControlPendingMessage = null;
+const AUTO_RESTART_DEFAULT_HOURS = 6;
 
 const legendOffsetPlugin = {
   id: 'legendOffset',
@@ -505,6 +512,10 @@ function setNodeControlButtonsDisabled(disabled){
   document.querySelectorAll('#nodeControlsCard [data-node-action]').forEach(btn => {
     btn.disabled = !!disabled;
   });
+  const hoursInput = document.getElementById('autoRestartHours');
+  if (hoursInput){
+    hoursInput.disabled = !!disabled;
+  }
 }
 
 function findContainer(name){
@@ -512,16 +523,41 @@ function findContainer(name){
   return (nodeControlState.containers || []).find(item => item && item.name === name) || null;
 }
 
+function describeAutoRestart(entry){
+  if (!entry || !entry.auto_restart) return 'Auto restart: Disabled';
+  const ar = entry.auto_restart;
+  if (!ar.installed){
+    return 'Auto restart: Disabled';
+  }
+  const base = ar.interval || (Number.isFinite(ar.interval_hours) ? `${Math.max(1, Math.round(ar.interval_hours))}h` : 'unknown');
+  if (ar.enabled){
+    const state = ar.active ? 'active' : 'enabled';
+    return `Auto restart: every ${base} (${state})`;
+  }
+  return `Auto restart: every ${base} (disabled)`;
+}
+
 function updateNodeContainerDetails(){
   const select = document.getElementById('nodeContainerSelect');
   const details = document.getElementById('nodeContainerDetails');
+  const hoursInput = document.getElementById('autoRestartHours');
   if (!details) return;
   if (!select || !select.value){
-    details.textContent = 'No container selected';
+    details.textContent = 'Auto restart: Disabled';
+    if (hoursInput) hoursInput.value = AUTO_RESTART_DEFAULT_HOURS;
     return;
   }
   const entry = findContainer(select.value);
-  details.textContent = entry ? (entry.status || 'Status unknown') : 'Status unknown';
+  const statusText = entry && entry.status ? entry.status : 'status unknown';
+  details.textContent = `Status: ${statusText} · ${describeAutoRestart(entry)}`;
+  if (hoursInput){
+    if (entry && entry.auto_restart && Number.isFinite(entry.auto_restart.interval_hours)){
+      const hours = Math.max(1, Math.round(entry.auto_restart.interval_hours));
+      hoursInput.value = hours;
+    } else {
+      hoursInput.value = AUTO_RESTART_DEFAULT_HOURS;
+    }
+  }
 }
 
 function renderNodeControls(errorMsg){
@@ -536,7 +572,7 @@ function renderNodeControls(errorMsg){
       select.disabled = true;
       select.value = '';
     }
-    if (details) details.textContent = '—';
+    if (details) details.textContent = 'Auto restart: unavailable';
     setNodeControlButtonsDisabled(true);
     if (!nodeControlPendingMessage){
       setNodeControlStatus(errorMsg, false);
@@ -549,7 +585,7 @@ function renderNodeControls(errorMsg){
       select.disabled = true;
       select.value = '';
     }
-    if (details) details.textContent = 'Enable DASH_ENABLE_CONTROL=1';
+    if (details) details.textContent = 'Auto restart: unavailable';
     setNodeControlButtonsDisabled(true);
     if (!nodeControlPendingMessage){
       setNodeControlStatus('Node controls disabled (set DASH_ENABLE_CONTROL=1 and DASH_ALLOW_DOCKER=1)', false);
@@ -620,7 +656,13 @@ async function refreshNodeControls(force = false){
 }
 
 async function performNodeAction(action){
-  const ACTION_MAP = { restart:'docker_restart', start:'docker_start', stop:'docker_stop' };
+  const ACTION_MAP = {
+    restart:'docker_restart',
+    start:'docker_start',
+    stop:'docker_stop',
+    auto_enable:'auto_restart_enable',
+    auto_disable:'auto_restart_disable',
+  };
   const select = document.getElementById('nodeContainerSelect');
   if (!ACTION_MAP[action]){
     setNodeControlStatus('Unsupported action', false);
@@ -631,22 +673,38 @@ async function performNodeAction(action){
     return;
   }
   const container = select.value;
-  const verb = action.charAt(0).toUpperCase() + action.slice(1);
+  const hoursInput = document.getElementById('autoRestartHours');
+  let successLabel = action.charAt(0).toUpperCase() + action.slice(1);
+  let statusMessage = `${successLabel} ${container}`;
+  const payload = { action: ACTION_MAP[action], container };
+  if (action === 'auto_enable'){
+    const hoursVal = Number(hoursInput ? hoursInput.value : AUTO_RESTART_DEFAULT_HOURS);
+    if (!Number.isFinite(hoursVal) || hoursVal <= 0){
+      setNodeControlStatus('Enter auto restart hours ≥ 1', false);
+      return;
+    }
+    payload.hours = hoursVal;
+    successLabel = `Auto restart (${hoursVal}h)`;
+    statusMessage = `Configuring auto restart (${hoursVal}h) for ${container}`;
+  } else if (action === 'auto_disable'){
+    successLabel = 'Auto restart disabled';
+    statusMessage = `Disabling auto restart for ${container}`;
+  }
   let finalMessage = '';
   let finalOk = true;
   try{
     setNodeControlButtonsDisabled(true);
-    setNodeControlStatus(`${verb}ing ${container}…`);
+    setNodeControlStatus(`${statusMessage}…`);
     const res = await fetch('/api/control', {
       method:'POST',
       headers:{'content-type':'application/json'},
-      body: JSON.stringify({ action: ACTION_MAP[action], container })
+      body: JSON.stringify(payload)
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok || !data || data.ok === false){
       throw new Error((data && data.error) || `Action failed (${res.status})`);
     }
-    finalMessage = (data.output || data.message || `${verb} succeeded`).trim();
+    finalMessage = (data.output || data.message || `${successLabel} succeeded`).trim();
     finalOk = true;
   }catch(err){
     finalMessage = err && err.message ? err.message : 'Action failed';
