@@ -25,7 +25,7 @@ DOCKER_BIN = shutil.which("docker") or ("/usr/bin/docker" if os.path.exists("/us
 SAMPLE_SEC = int(os.getenv("BDAG_SAMPLE_SEC", "5"))
 WINDOW = int(os.getenv("BDAG_WINDOW", "240"))  # points kept in memory
 ENABLE_CONTROL = os.getenv("DASH_ENABLE_CONTROL", "1") == "1"
-ALLOW_DOCKER = os.getenv("DASH_ALLOW_DOCKER", "0") == "1" and shutil.which("docker")
+ALLOW_DOCKER = os.getenv("DASH_ALLOW_DOCKER", "1") == "1" and shutil.which("docker")
 STALL_THRESHOLD_MS = int(os.getenv("DASH_STALL_THRESHOLD_MS", "180000"))
 SYNC_RATE_THRESHOLD = float(os.getenv("DASH_SYNC_RATE_THRESHOLD", "0.3"))
 DOWNLOAD_RATE_THRESHOLD = float(os.getenv("DASH_DOWNLOAD_RATE_THRESHOLD", "1.0"))
