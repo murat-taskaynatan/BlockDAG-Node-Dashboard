@@ -112,23 +112,7 @@ The rest of the workflow mirrors the local installer (venv setup, service instal
 
 ---
 
-## 5. Common Questions
-
-**Do I need to edit dashboard.env?**  
-Only if your node isn’t on `http://127.0.0.1:18545` or requires authentication.
-
-**What user runs the service?**  
-Whichever account executes the installer (defaults to the invoking user). Override with `SERVICE_USER` / `SERVICE_GROUP` env vars.
-
-**Can I reinstall safely?**  
-Yes. Re-running the installer synchronizes files, rebuilds the virtualenv, and reloads systemd. Existing units are backed up with timestamped suffixes when overwritten.
-
-**Where is the virtualenv?**  
-`/opt/blockdag-dashboard/.venv` (or `${INSTALL_DIR}/.venv` if overridden).
-
----
-
-## 6. Removal / Cleanup
+## 5. Removal / Cleanup
 
 Disable and remove units:
 
@@ -149,7 +133,7 @@ sudo rm -rf /etc/blockdag-dashboard
 
 ---
 
-## 7. Support
+## 5. Support
 
 - Repo issues list: <https://github.com/murat-taskaynatan/BlockDAG-Node-Dashboard/issues>
 - Provide logs (`journalctl -u blockdag-dashboard`) and environment details when reporting problems.
