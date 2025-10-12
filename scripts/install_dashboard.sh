@@ -29,11 +29,16 @@ sudo mkdir -p "$INSTALL_DIR"
 sudo chown "$SERVICE_USER":"$SERVICE_GROUP" "$INSTALL_DIR"
 
 printf "[3/7] Syncing dashboard files from %s...\n" "$REPO_SRC"
-rsync -a --delete "$REPO_SRC/" "$INSTALL_DIR/"
+rsync -a --delete \
+  --exclude='.git/' \
+  --exclude='.venv/' \
+  --exclude='__pycache__/' \
+  "$REPO_SRC/" "$INSTALL_DIR/"
 
 printf "[4/7] Bootstrapping virtual environment...\n"
 "$PYTHON_BIN" -m venv "$INSTALL_DIR/.venv"
 source "$INSTALL_DIR/.venv/bin/activate"
+export PIP_BREAK_SYSTEM_PACKAGES=1
 pip install --upgrade pip >/dev/null
 if [[ -f "$INSTALL_DIR/requirements.txt" ]]; then
   pip install -r "$INSTALL_DIR/requirements.txt"
