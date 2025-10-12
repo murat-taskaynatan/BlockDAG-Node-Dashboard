@@ -33,16 +33,16 @@
 .node-ctrls input{background:transparent;border:1px solid #3a4a7a;border-radius:.6rem;padding:.35rem .6rem;color:inherit}
 .node-ctrls select{width:100%;appearance:none;background-color:rgba(255,255,255,.06);border:1px solid #3a4a7a;border-radius:.6rem;padding:.35rem .6rem;color:var(--text);background-image:linear-gradient(45deg,transparent 50%,currentColor 50%),linear-gradient(135deg,currentColor 50%,transparent 50%);background-position:calc(100% - 18px) calc(50% - 3px),calc(100% - 12px) calc(50% - 3px);background-size:6px 6px;background-repeat:no-repeat;padding-right:1.8rem}
 .node-ctrls select option{background-color:var(--card);color:var(--text)}
-#nodeControlsCard .node-ctrls--node{display:flex;flex-wrap:wrap;gap:12px;align-items:flex-end}
-#nodeControlsCard .node-ctrls--left{flex:2 1 380px;display:flex;flex-wrap:wrap;gap:12px;align-items:flex-end}
-#nodeControlsCard .node-ctrls--right{flex:1 1 220px;display:flex;flex-direction:column;gap:8px;align-items:flex-end}
-#nodeControlsCard .node-ctrls--container-buttons{display:flex;gap:8px;flex:1 1 100%;flex-wrap:wrap}
-#nodeControlsCard .node-ctrls--auto-buttons{display:flex;gap:8px;flex:1 1 auto;justify-content:flex-end}
-#nodeControlsCard .node-ctrls--node label{flex:1 1 200px;min-width:200px}
-#nodeControlsCard .node-ctrls--node .btn{min-width:120px}
-#nodeControlsCard .node-ctrls--right label{display:flex;flex-direction:column;align-items:flex-end;text-align:right;gap:4px}
-#nodeControlsCard .node-ctrls--right label span{text-align:right;width:100%}
-#nodeControlsCard .node-ctrls--right input{width:120px;text-align:center}
+#nodeControlsCard .node-ctrls--node{display:grid;grid-template-columns:minmax(320px,2fr) minmax(200px,1fr);gap:12px;align-items:flex-end}
+#nodeControlsCard .node-ctrls__col{display:flex;flex-direction:column;gap:8px}
+#nodeControlsCard .node-ctrls__col label{display:flex;flex-direction:column;gap:4px}
+#nodeControlsCard .node-ctrls__col--auto label{align-items:flex-end;text-align:right}
+#nodeControlsCard .node-ctrls__col--auto label span{text-align:right;width:100%}
+#nodeControlsCard .node-ctrls__col--auto input{width:140px;text-align:center;align-self:flex-end}
+#nodeControlsCard .node-ctrls--container-buttons{display:flex;gap:8px;flex-wrap:wrap}
+#nodeControlsCard .node-ctrls--auto-buttons{display:flex;gap:8px;justify-content:flex-end}
+#nodeControlsCard .node-ctrls--node .btn{min-width:110px}
+#nodeControlsCard .node-ctrls--node .sp{grid-column:1/-1}
 #nodeControlStatus{min-height:1.2em;opacity:0;transition:opacity .2s ease}
 #nodeContainerDetails{opacity:.8}
 #ctlStatus{min-width:120px;display:inline-block;opacity:1}
@@ -96,7 +96,7 @@
     <div class="card" id="nodeControlsCard" hidden>
       <div class="title">Node Controls</div>
       <div class="node-ctrls node-ctrls--node">
-        <div class="node-ctrls--left">
+        <div class="node-ctrls__col node-ctrls__col--primary">
           <label>
             <span>Container</span>
             <select id="nodeContainerSelect" disabled>
@@ -109,7 +109,7 @@
             <button class="btn" data-node-action="stop" id="btnContainerStop" disabled>Stop</button>
           </div>
         </div>
-        <div class="node-ctrls--right">
+        <div class="node-ctrls__col node-ctrls__col--auto">
           <label>
             <span>Auto restart (hrs)</span>
             <input type="number" id="autoRestartHours" min="1" step="1" value="6">
