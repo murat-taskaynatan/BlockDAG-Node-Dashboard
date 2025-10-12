@@ -9,6 +9,8 @@ A Flask-based monitoring dashboard for BlockDAG nodes. The UI surfaces node heal
 ## Features
 - Real-time status pill with node state, peers, latency, and uptime.
 - Block activity dashboard with chart value badges highlighting the latest metrics.
+- Node controls gather BlockDAG’s Docker containers inside the dashboard, giving authorized operators
+  a single place to monitor status and trigger safe restarts without touching the command line.
 - Chart controls for sampling window and history length, with server-side buffering.
 - Dynamic Flask route `/api/status` and chart APIs powering the frontend.
 - Live log viewer with ANSI cleanup and auto-scroll to keep recent node activity visible.
