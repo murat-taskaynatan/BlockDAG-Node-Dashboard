@@ -33,18 +33,24 @@
 .node-ctrls input{background:transparent;border:1px solid #3a4a7a;border-radius:.6rem;padding:.35rem .6rem;color:inherit}
 .node-ctrls select{width:100%;appearance:none;background-color:rgba(255,255,255,.06);border:1px solid #3a4a7a;border-radius:.6rem;padding:.35rem .6rem;color:var(--text);background-image:linear-gradient(45deg,transparent 50%,currentColor 50%),linear-gradient(135deg,currentColor 50%,transparent 50%);background-position:calc(100% - 18px) calc(50% - 3px),calc(100% - 12px) calc(50% - 3px);background-size:6px 6px;background-repeat:no-repeat;padding-right:1.8rem}
 .node-ctrls select option{background-color:var(--card);color:var(--text)}
-#nodeControlsCard .node-ctrls--node{display:flex;flex-wrap:wrap;gap:12px;align-items:flex-end;justify-content:space-between}
-#nodeControlsCard .node-ctrls__col{display:flex;flex-direction:column;gap:8px;flex:1 1 auto}
-#nodeControlsCard .node-ctrls__col label{display:flex;flex-direction:column;gap:4px}
-#nodeControlsCard .node-ctrls__col--primary{flex:3 1 420px;display:flex;align-items:flex-end;gap:12px}
-#nodeControlsCard .node-ctrls__col--primary label{flex:1 1 auto;min-width:260px}
-#nodeControlsCard .node-ctrls--container-buttons{display:flex;gap:8px;flex-wrap:wrap}
-#nodeControlsCard .node-ctrls__col--auto{flex:0 1 320px;display:flex;align-items:flex-end;gap:8px;justify-content:flex-end}
-#nodeControlsCard .node-ctrls__col--auto label{align-items:flex-end;text-align:right}
-#nodeControlsCard .node-ctrls__col--auto label span{text-align:right;width:100%}
-#nodeControlsCard .node-ctrls__col--auto input{width:110px;text-align:center;align-self:flex-end}
-#nodeControlsCard .node-ctrls--auto-buttons{display:flex;gap:8px}
-#nodeControlsCard .node-ctrls--node .btn{min-width:110px}
+#nodeControlsCard .node-ctrls--node{display:grid;grid-template-columns:minmax(220px,1.4fr) minmax(200px,1fr) minmax(160px,.9fr) minmax(140px,auto) minmax(200px,.9fr) minmax(160px,.7fr);gap:12px;align-items:end}
+#nodeControlsCard .node-ctrls__field{display:flex;flex-direction:column;gap:4px;min-width:0}
+#nodeControlsCard .node-ctrls__field span{opacity:.7}
+#nodeControlsCard .node-ctrls__field select{width:100%}
+#nodeControlsCard .node-ctrls__actions{display:flex;gap:8px;flex-wrap:nowrap}
+#nodeControlsCard .node-ctrls__actions .btn{flex:1 1 auto;min-width:120px}
+#nodeControlsCard .node-ctrls__field--auto input{width:100%;text-align:center}
+#nodeControlsCard .node-ctrls__btn--auto-apply{width:100%;min-width:110px}
+#nodeControlsCard .node-ctrls__btn--auto-disable{min-width:110px}
+#nodeControlsCard .node-ctrls__meta{align-self:center;justify-self:end;text-align:right;margin:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#nodeControlsCard .node-ctrls__meta--status{justify-self:start;text-align:left}
+@media (max-width:1100px){
+  #nodeControlsCard .node-ctrls--node{grid-template-columns:repeat(auto-fit,minmax(260px,1fr));align-items:stretch}
+  #nodeControlsCard .node-ctrls__actions{flex-wrap:wrap}
+  #nodeControlsCard .node-ctrls__actions .btn{flex:1 1 120px}
+  #nodeControlsCard .node-ctrls__btn--auto-apply,#nodeControlsCard .node-ctrls__btn--auto-disable{width:100%;min-width:0}
+  #nodeControlsCard .node-ctrls__meta{grid-column:1/-1;justify-self:start;text-align:left;white-space:normal}
+}
 #nodeControlStatus{min-height:1.2em;opacity:0;transition:opacity .2s ease}
 #nodeContainerDetails{opacity:.8;text-align:right}
 #ctlStatus{min-width:120px;display:inline-block;opacity:1}
@@ -98,31 +104,23 @@
     <div class="card" id="nodeControlsCard" hidden>
       <div class="title">Node Controls</div>
       <div class="node-ctrls node-ctrls--node">
-        <div class="node-ctrls__col node-ctrls__col--primary">
-          <label>
-            <span>Container</span>
-            <select id="nodeContainerSelect" disabled>
-              <option value="">Loading…</option>
-            </select>
-          </label>
-          <div class="node-ctrls--container-buttons">
-            <button class="btn" data-node-action="restart" id="btnContainerRestart" disabled>Restart</button>
-            <button class="btn" data-node-action="start" id="btnContainerStart" disabled>Start</button>
-            <button class="btn" data-node-action="stop" id="btnContainerStop" disabled>Stop</button>
-          </div>
+        <label class="node-ctrls__field node-ctrls__field--container">
+          <span>Container</span>
+          <select id="nodeContainerSelect" disabled>
+            <option value="">Loading…</option>
+          </select>
+        </label>
+        <div class="node-ctrls__actions node-ctrls__actions--container">
+          <button class="btn" data-node-action="restart" id="btnContainerRestart" disabled>Restart</button>
         </div>
-        <div class="node-ctrls__col node-ctrls__col--auto">
-          <label>
-            <span>Auto restart (hrs)</span>
-            <input type="number" id="autoRestartHours" min="1" step="1" value="6">
-          </label>
-          <div class="node-ctrls--auto-buttons">
-            <button class="btn" data-node-action="auto_enable" id="btnAutoRestartEnable" disabled>Apply</button>
-            <button class="btn" data-node-action="auto_disable" id="btnAutoRestartDisable" disabled>Disable</button>
-          </div>
-        </div>
-        <span class="sp" id="nodeContainerDetails">Auto restart: —</span>
-        <span class="sp" id="nodeControlStatus"></span>
+        <label class="node-ctrls__field node-ctrls__field--auto">
+          <span>Auto restart (hrs)</span>
+          <input type="number" id="autoRestartHours" min="1" step="1" value="6">
+        </label>
+        <button class="btn node-ctrls__btn node-ctrls__btn--auto-apply" data-node-action="auto_enable" id="btnAutoRestartEnable" disabled>Apply</button>
+        <button class="btn node-ctrls__btn node-ctrls__btn--auto-disable" data-node-action="auto_disable" id="btnAutoRestartDisable" disabled>Disable</button>
+        <span class="node-ctrls__meta" id="nodeContainerDetails">Auto restart: —</span>
+        <span class="node-ctrls__meta node-ctrls__meta--status" id="nodeControlStatus"></span>
       </div>
     </div>
 
