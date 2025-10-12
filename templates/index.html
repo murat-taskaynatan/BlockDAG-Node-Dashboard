@@ -547,7 +547,10 @@ function describeAutoRestart(entry){
   }
   const base = ar.interval || (Number.isFinite(ar.interval_hours) ? `${Math.max(1, Math.round(ar.interval_hours))}h` : 'unknown');
   if (ar.enabled){
-    const state = ar.active ? 'active' : 'enabled';
+    if (ar.active){
+      return 'Auto restart: Active';
+    }
+    const state = 'enabled';
     return `Auto restart: every ${base} (${state})`;
   }
   return `Auto restart: every ${base} (disabled)`;
@@ -715,6 +718,13 @@ async function performNodeAction(action){
       throw new Error((data && data.error) || `Action failed (${res.status})`);
     }
     finalMessage = (data.output || data.message || `${successLabel} succeeded`).trim();
+    const lowerMessage = finalMessage.toLowerCase();
+    if (action === 'auto_enable' && lowerMessage.includes('setup complete')){
+      const setupLine = finalMessage.split('\n').find(line => line.toLowerCase().includes('setup complete'));
+      finalMessage = (setupLine || 'Setup complete.').trim();
+    } else if (action !== 'auto_enable' && lowerMessage.includes('setup complete')){
+      finalMessage = `${successLabel} succeeded`;
+    }
     finalOk = true;
   }catch(err){
     finalMessage = err && err.message ? err.message : 'Action failed';
