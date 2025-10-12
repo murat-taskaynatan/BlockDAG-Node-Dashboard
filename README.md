@@ -55,14 +55,6 @@ export FLASK_APP=app.py
 flask run --host=0.0.0.0 --port=8080
 ```
 
-Set the following env vars (or edit `/etc/blockdag-dashboard/dashboard.env` when deployed):
-
-```
-BDAG_RPC_BASE=http://127.0.0.1:18545
-BDAG_RPC_USER=
-BDAG_RPC_PASS=
-```
-
 ## Repository Layout
 - `app.py` – Flask application and sampler
 - `templates/index.html` – main dashboard template
