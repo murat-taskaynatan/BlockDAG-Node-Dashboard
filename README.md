@@ -61,6 +61,4 @@ git tag -a v1.x.x -m "Version 1.x.x"
 git push origin master --tags
 ```
 
-## License
 
-Proprietary – internal BlockDAG use only (update if publishing publicly).
