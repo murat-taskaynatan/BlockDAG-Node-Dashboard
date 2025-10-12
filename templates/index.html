@@ -33,6 +33,10 @@
 .node-ctrls input{background:transparent;border:1px solid #3a4a7a;border-radius:.6rem;padding:.35rem .6rem;color:inherit}
 .node-ctrls select{width:100%;appearance:none;background-color:rgba(255,255,255,.06);border:1px solid #3a4a7a;border-radius:.6rem;padding:.35rem .6rem;color:var(--text);background-image:linear-gradient(45deg,transparent 50%,currentColor 50%),linear-gradient(135deg,currentColor 50%,transparent 50%);background-position:calc(100% - 18px) calc(50% - 3px),calc(100% - 12px) calc(50% - 3px);background-size:6px 6px;background-repeat:no-repeat;padding-right:1.8rem}
 .node-ctrls select option{background-color:var(--card);color:var(--text)}
+.node-ctrls.node-ctrls--node{grid-template-columns:repeat(auto-fit,minmax(160px,1fr))}
+.node-ctrls--node .btn{min-width:0}
+#nodeControlStatus{min-height:1.2em;opacity:0;transition:opacity .2s ease}
+#nodeContainerDetails{opacity:.8}
 #ctlStatus{min-width:120px;display:inline-block;opacity:1}
   .activity-head{display:flex;flex-wrap:wrap;gap:16px;align-items:flex-start;margin-bottom:8px}
   .activity-head-col{flex:1 1 320px}
@@ -78,6 +82,23 @@
         <div class="kv"><div class="k">rpc latency (ms)</div><div class="v" id="vLat">—</div></div>
         <div class="kv"><div class="k">last seen</div><div class="v" id="vLast">—</div></div>
         <div class="kv"><div class="k">uptime</div><div class="v" id="vUptime">—</div></div>
+      </div>
+    </div>
+
+    <div class="card" id="nodeControlsCard" hidden>
+      <div class="title">Node Controls</div>
+      <div class="node-ctrls node-ctrls--node">
+        <label>
+          <span>Container</span>
+          <select id="nodeContainerSelect" disabled>
+            <option value="">Loading…</option>
+          </select>
+        </label>
+        <button class="btn" data-node-action="restart" id="btnContainerRestart" disabled>Restart</button>
+        <button class="btn" data-node-action="start" id="btnContainerStart" disabled>Start</button>
+        <button class="btn" data-node-action="stop" id="btnContainerStop" disabled>Stop</button>
+        <span class="sp" id="nodeContainerDetails">—</span>
+        <span class="sp" id="nodeControlStatus"></span>
       </div>
     </div>
 
@@ -224,6 +245,9 @@ const activitySeriesLabels = {
   sync: 'Sync Rate (blk/s)',
 };
 const baseChartLabels = { peers: 'Peers', latency: 'RPC Latency (ms)' };
+const NODE_CTRL_REFRESH_MS = 10000;
+const nodeControlState = { enabled:false, containers:[], lastFetched:0 };
+let nodeControlPendingMessage = null;
 
 const legendOffsetPlugin = {
   id: 'legendOffset',
@@ -467,6 +491,203 @@ function renderHeightValue(localSeries, remoteSeries){
   const diffText = Number.isFinite(diff) ? ` · Δ ${formatValueDisplay(diff)}` : '';
   tag.textContent = `L ${formatValueDisplay(localLatest)} · R ${formatValueDisplay(remoteLatest)}${diffText}`;
   tag.title = 'Local vs Remote height · Δ = remote - local';
+}
+
+function setNodeControlStatus(msg, ok = true){
+  const el = document.getElementById('nodeControlStatus');
+  if (!el) return;
+  el.textContent = msg || '';
+  el.style.color = ok ? 'var(--muted)' : 'var(--bad)';
+  el.style.opacity = msg ? 1 : 0;
+}
+
+function setNodeControlButtonsDisabled(disabled){
+  document.querySelectorAll('#nodeControlsCard [data-node-action]').forEach(btn => {
+    btn.disabled = !!disabled;
+  });
+}
+
+function findContainer(name){
+  if (!name) return null;
+  return (nodeControlState.containers || []).find(item => item && item.name === name) || null;
+}
+
+function updateNodeContainerDetails(){
+  const select = document.getElementById('nodeContainerSelect');
+  const details = document.getElementById('nodeContainerDetails');
+  if (!details) return;
+  if (!select || !select.value){
+    details.textContent = 'No container selected';
+    return;
+  }
+  const entry = findContainer(select.value);
+  details.textContent = entry ? (entry.status || 'Status unknown') : 'Status unknown';
+}
+
+function renderNodeControls(errorMsg){
+  const card = document.getElementById('nodeControlsCard');
+  const select = document.getElementById('nodeContainerSelect');
+  const details = document.getElementById('nodeContainerDetails');
+  if (!card) return;
+  card.hidden = false;
+  if (errorMsg){
+    if (select){
+      select.innerHTML = '<option value=\"\">Unavailable</option>';
+      select.disabled = true;
+      select.value = '';
+    }
+    if (details) details.textContent = '—';
+    setNodeControlButtonsDisabled(true);
+    if (!nodeControlPendingMessage){
+      setNodeControlStatus(errorMsg, false);
+    }
+    return;
+  }
+  if (!nodeControlState.enabled){
+    if (select){
+      select.innerHTML = '<option value=\"\">Controls disabled</option>';
+      select.disabled = true;
+      select.value = '';
+    }
+    if (details) details.textContent = 'Enable DASH_ENABLE_CONTROL=1';
+    setNodeControlButtonsDisabled(true);
+    if (!nodeControlPendingMessage){
+      setNodeControlStatus('Node controls disabled (set DASH_ENABLE_CONTROL=1 and DASH_ALLOW_DOCKER=1)', false);
+    }
+    return;
+  }
+  const containers = Array.isArray(nodeControlState.containers) ? nodeControlState.containers : [];
+  if (select){
+    const previous = select.value;
+    select.innerHTML = '';
+    if (!containers.length){
+      const opt = document.createElement('option');
+      opt.value = '';
+      opt.textContent = '(no containers)';
+      select.appendChild(opt);
+      select.disabled = true;
+      select.value = '';
+    } else {
+      containers.forEach((item, index) => {
+        if (!item || !item.name) return;
+        const opt = document.createElement('option');
+        opt.value = item.name;
+        opt.textContent = item.name;
+        if (previous === item.name || (!previous && index === 0)){
+          opt.selected = true;
+        }
+        select.appendChild(opt);
+      });
+      select.disabled = false;
+      if (!select.value && containers.length){
+        select.value = containers[0].name;
+      }
+    }
+  }
+  const hasContainer = !!(select && select.value);
+  setNodeControlButtonsDisabled(!hasContainer);
+  updateNodeContainerDetails();
+  if (!hasContainer){
+    if (!nodeControlPendingMessage){
+      setNodeControlStatus('No containers detected', false);
+    }
+  } else if (!nodeControlPendingMessage){
+    setNodeControlStatus('Select an action to manage the container');
+  }
+}
+
+async function refreshNodeControls(force = false){
+  const now = Date.now();
+  if (!force && now - nodeControlState.lastFetched < NODE_CTRL_REFRESH_MS){
+    return;
+  }
+  try{
+    const res = await fetch('/api/containers', { cache:'no-store' });
+    if (!res.ok){
+      throw new Error(`HTTP ${res.status}`);
+    }
+    const data = await res.json();
+    nodeControlState.enabled = !!(data && data.enabled);
+    nodeControlState.containers = Array.isArray(data?.containers) ? data.containers : [];
+    nodeControlState.lastFetched = Date.now();
+    renderNodeControls();
+  }catch(err){
+    nodeControlState.enabled = false;
+    nodeControlState.lastFetched = Date.now();
+    console.warn('[node-controls] failed to load containers', err);
+    renderNodeControls('Node controls unavailable');
+  }
+}
+
+async function performNodeAction(action){
+  const ACTION_MAP = { restart:'docker_restart', start:'docker_start', stop:'docker_stop' };
+  const select = document.getElementById('nodeContainerSelect');
+  if (!ACTION_MAP[action]){
+    setNodeControlStatus('Unsupported action', false);
+    return;
+  }
+  if (!select || !select.value){
+    setNodeControlStatus('Select a container first', false);
+    return;
+  }
+  const container = select.value;
+  const verb = action.charAt(0).toUpperCase() + action.slice(1);
+  let finalMessage = '';
+  let finalOk = true;
+  try{
+    setNodeControlButtonsDisabled(true);
+    setNodeControlStatus(`${verb}ing ${container}…`);
+    const res = await fetch('/api/control', {
+      method:'POST',
+      headers:{'content-type':'application/json'},
+      body: JSON.stringify({ action: ACTION_MAP[action], container })
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || !data || data.ok === false){
+      throw new Error((data && data.error) || `Action failed (${res.status})`);
+    }
+    finalMessage = (data.output || data.message || `${verb} succeeded`).trim();
+    finalOk = true;
+  }catch(err){
+    finalMessage = err && err.message ? err.message : 'Action failed';
+    finalOk = false;
+  }finally{
+    nodeControlPendingMessage = { text: finalMessage, ok: finalOk };
+    nodeControlState.lastFetched = 0;
+    try{
+      await refreshNodeControls(true);
+    }catch(refreshErr){
+      console.warn('[node-controls] refresh after action failed', refreshErr);
+      renderNodeControls('Node controls unavailable');
+    }
+    if (nodeControlPendingMessage){
+      setNodeControlStatus(nodeControlPendingMessage.text, nodeControlPendingMessage.ok);
+      nodeControlPendingMessage = null;
+    }
+  }
+}
+
+function wireNodeControls(){
+  const card = document.getElementById('nodeControlsCard');
+  if (!card) return;
+  const select = document.getElementById('nodeContainerSelect');
+  if (select){
+    select.addEventListener('change', () => {
+      updateNodeContainerDetails();
+      setNodeControlStatus('');
+    });
+  }
+  document.querySelectorAll('#nodeControlsCard [data-node-action]').forEach(btn => {
+    btn.addEventListener('click', ev => {
+      ev.preventDefault();
+      const action = btn.dataset.nodeAction;
+      if (action){
+        performNodeAction(action);
+      }
+    });
+  });
+  renderNodeControls();
+  setNodeControlStatus('Loading containers…');
 }
 
 function formatHeightLabel(value){
@@ -812,7 +1033,11 @@ async function refreshCharts(){
   }
 }
 
-async function tick(){ await refreshStatus(); await refreshCharts(); }
+async function tick(){
+  await refreshStatus();
+  await refreshCharts();
+  await refreshNodeControls();
+}
 async function preloadHistory(){
   if (!window.Chart) return;
   try{
@@ -1024,10 +1249,12 @@ function wireLogsPanel(){
 
 const pollMs = Number(window.POLL_INTERVAL || 2000) || 2000;
 (async () => {
+  wireNodeControls();
   wireControls();
   wireLogsPanel();
   await loadChartConfig();
   await preloadHistory();
+  await refreshNodeControls(true);
   await tick();
   await refreshLogs();
   setInterval(tick, pollMs);
