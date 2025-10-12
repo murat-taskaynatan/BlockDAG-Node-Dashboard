@@ -587,9 +587,6 @@ function renderNodeControls(errorMsg){
     }
     if (details) details.textContent = 'Auto restart: unavailable';
     setNodeControlButtonsDisabled(true);
-    if (!nodeControlPendingMessage){
-      setNodeControlStatus('Node controls disabled (set DASH_ENABLE_CONTROL=1 and DASH_ALLOW_DOCKER=1)', false);
-    }
     return;
   }
   const containers = Array.isArray(nodeControlState.containers) ? nodeControlState.containers : [];
@@ -624,11 +621,9 @@ function renderNodeControls(errorMsg){
   setNodeControlButtonsDisabled(!hasContainer);
   updateNodeContainerDetails();
   if (!hasContainer){
-    if (!nodeControlPendingMessage){
-      setNodeControlStatus('No containers detected', false);
-    }
+    setNodeControlStatus('No containers detected', false);
   } else if (!nodeControlPendingMessage){
-    setNodeControlStatus('Select an action to manage the container');
+    setNodeControlStatus('');
   }
 }
 
