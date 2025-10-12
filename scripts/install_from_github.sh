@@ -2,7 +2,7 @@
 set -euo pipefail
 
 REPO_URL="${REPO_URL:-https://github.com/murat-taskaynatan/BlockDAG-Node-Dashboard.git}"
-REPO_BRANCH="${REPO_BRANCH:-master}"
+REPO_BRANCH="${REPO_BRANCH:-main}"
 INSTALL_DIR="${INSTALL_DIR:-/opt/blockdag-dashboard}"
 SERVICE_NAME="${SERVICE_NAME:-blockdag-dashboard.service}"
 SYSTEMD_DIR="${SYSTEMD_DIR:-/etc/systemd/system}"
@@ -26,7 +26,7 @@ TEMP_ROOT="$(mktemp -d)"
 trap 'rm -rf "$TEMP_ROOT"' EXIT
 
 printf "[1/7] Cloning %s (branch %s)...\n" "$REPO_URL" "$REPO_BRANCH"
-git clone --depth 1 --branch "$REPO_BRANCH" "$REPO_URL" "$TEMP_ROOT/repo"
+git clone --depth 1 --branch "$REPO_BRANCH" --single-branch "$REPO_URL" "$TEMP_ROOT/repo"
 
 printf "[2/7] Syncing files to %s...\n" "$INSTALL_DIR"
 sudo mkdir -p "$INSTALL_DIR"
