@@ -548,8 +548,7 @@ function updateNodeContainerDetails(){
     return;
   }
   const entry = findContainer(select.value);
-  const statusText = entry && entry.status ? entry.status : 'status unknown';
-  details.textContent = `Status: ${statusText} · ${describeAutoRestart(entry)}`;
+  details.textContent = describeAutoRestart(entry);
   if (hoursInput){
     if (entry && entry.auto_restart && Number.isFinite(entry.auto_restart.interval_hours)){
       const hours = Math.max(1, Math.round(entry.auto_restart.interval_hours));
