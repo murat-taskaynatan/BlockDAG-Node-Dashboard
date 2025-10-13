@@ -2,7 +2,8 @@
 set -euo pipefail
 
 REPO_URL="${REPO_URL:-https://github.com/murat-taskaynatan/BlockDAG-Node-Dashboard.git}"
-REPO_BRANCH="${REPO_BRANCH:-main}"
+# Allow callers to set either REPO_REF (preferred) or legacy REPO_BRANCH; default to latest release tag.
+REPO_REF="${REPO_REF:-${REPO_BRANCH:-1.2.0}}"
 INSTALL_DIR="${INSTALL_DIR:-/opt/blockdag-dashboard}"
 SERVICE_NAME="${SERVICE_NAME:-blockdag-dashboard.service}"
 SYSTEMD_DIR="${SYSTEMD_DIR:-/etc/systemd/system}"
@@ -25,8 +26,8 @@ need_cmd sudo
 TEMP_ROOT="$(mktemp -d)"
 trap 'rm -rf "$TEMP_ROOT"' EXIT
 
-printf "[1/7] Cloning %s (branch %s)...\n" "$REPO_URL" "$REPO_BRANCH"
-git clone --depth 1 --branch "$REPO_BRANCH" --single-branch "$REPO_URL" "$TEMP_ROOT/repo"
+printf "[1/7] Cloning %s (ref %s)...\n" "$REPO_URL" "$REPO_REF"
+git clone --depth 1 --branch "$REPO_REF" --single-branch "$REPO_URL" "$TEMP_ROOT/repo"
 
 printf "[2/7] Syncing files to %s...\n" "$INSTALL_DIR"
 sudo mkdir -p "$INSTALL_DIR"
