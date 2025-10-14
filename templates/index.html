@@ -348,7 +348,7 @@ function buildChainJobMessage(job){
   if (job.active && job.type === 'backup'){
     const details = job.details || {};
     const name = formatBackupNameDisplay(details.path);
-    const parts = [`Creating ${name}`];
+    const parts = [`Creating backup ${name}`];
     const started = job.started ? Date.parse(job.started) : NaN;
     if (Number.isFinite(started)){
       const elapsedSec = Math.max(0, (Date.now() - started) / 1000);
@@ -828,7 +828,7 @@ function renderChainControls(){
   if (job && job.active && job.type === 'backup'){
     const details = job.details || {};
     const pendingName = formatBackupNameDisplay(details.path);
-    const pendingText = jobMessage || `Creating ${pendingName}`;
+    const pendingText = jobMessage || `Creating backup ${pendingName}`;
     const pendingValue = (job.details && job.details.path) || '';
     const pendingOpt = document.createElement('option');
     pendingOpt.value = pendingValue;
