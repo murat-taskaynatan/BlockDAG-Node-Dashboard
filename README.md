@@ -60,7 +60,7 @@ REPO_URL=https://github.com/murat-taskaynatan/BlockDAG-Node-Dashboard.git \
 
 ## Releasing
 
-Current stable release tag: `v1.2.0`.
+Current stable release tag: `v1.3.0`.
 
 ```bash
 git tag -a v1.x.x -m "Version 1.x.x"
