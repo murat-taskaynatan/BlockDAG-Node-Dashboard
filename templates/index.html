@@ -39,17 +39,30 @@
 #nodeControlsCard .node-ctrls__field select{width:100%}
 #nodeControlsCard .node-ctrls__actions{display:flex;gap:8px;flex-wrap:nowrap}
 #nodeControlsCard .node-ctrls__actions .btn{flex:1 1 auto;min-width:120px}
+#nodeControlsCard .node-ctrls__actions--chain .btn{min-width:100px}
 #nodeControlsCard .node-ctrls__field--auto input{width:100%;text-align:center}
 #nodeControlsCard .node-ctrls__btn--auto-apply{width:100%;min-width:110px}
 #nodeControlsCard .node-ctrls__btn--auto-disable{min-width:110px}
 #nodeControlsCard .node-ctrls__meta{align-self:center;justify-self:end;text-align:right;margin:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 #nodeControlsCard .node-ctrls__meta--status{justify-self:start;text-align:left}
+#nodeControlsCard .node-ctrls__row{grid-column:1/-1;display:grid;gap:12px;align-items:end}
+#nodeControlsCard .node-ctrls__row--chain{margin-top:8px;grid-template-columns:minmax(220px,1.4fr) minmax(220px,auto) minmax(240px,1fr)}
+#nodeControlsCard .node-ctrls__field--chain{display:flex;flex-direction:column;gap:4px;min-width:0}
+#nodeControlsCard .node-ctrls__field--chain span{opacity:.7}
+#nodeControlsCard .node-ctrls__field--chain select{width:100%}
+#nodeControlsCard .node-ctrls__actions--chain{display:flex;gap:8px;align-items:center;justify-content:flex-end;flex-wrap:nowrap}
+#nodeControlsCard .node-ctrls__actions--chain .btn{min-width:100px}
+#nodeControlsCard .node-ctrls__status{display:none}
 @media (max-width:1100px){
   #nodeControlsCard .node-ctrls--node{grid-template-columns:repeat(auto-fit,minmax(260px,1fr));align-items:stretch}
   #nodeControlsCard .node-ctrls__actions{flex-wrap:wrap}
   #nodeControlsCard .node-ctrls__actions .btn{flex:1 1 120px}
   #nodeControlsCard .node-ctrls__btn--auto-apply,#nodeControlsCard .node-ctrls__btn--auto-disable{width:100%;min-width:0}
   #nodeControlsCard .node-ctrls__meta{grid-column:1/-1;justify-self:start;text-align:left;white-space:normal}
+  #nodeControlsCard .node-ctrls__row--chain{grid-template-columns:repeat(auto-fit,minmax(240px,1fr))}
+  #nodeControlsCard .node-ctrls__status--chain{text-align:left}
+  #nodeControlsCard .node-ctrls__actions--chain{justify-content:flex-start;flex-wrap:wrap}
+  #nodeControlsCard .node-ctrls__actions--chain .btn{flex:1 1 140px}
 }
 #nodeControlStatus{min-height:1.2em;opacity:0;transition:opacity .2s ease}
 #nodeContainerDetails{opacity:.8;text-align:right}
@@ -121,6 +134,20 @@
         <button class="btn node-ctrls__btn node-ctrls__btn--auto-disable" data-node-action="auto_disable" id="btnAutoRestartDisable" disabled>Disable</button>
         <span class="node-ctrls__meta" id="nodeContainerDetails">Auto restart: —</span>
         <span class="node-ctrls__meta node-ctrls__meta--status" id="nodeControlStatus"></span>
+        <div class="node-ctrls__row node-ctrls__row--chain">
+          <label class="node-ctrls__field node-ctrls__field--chain">
+            <span>Chain backups</span>
+            <select id="chainBackupSelect" disabled>
+              <option value="">Loading…</option>
+            </select>
+          </label>
+          <div class="node-ctrls__actions node-ctrls__actions--chain">
+            <button class="btn" data-node-action="chain_restore" id="btnChainRestore" disabled>Restore Selected</button>
+            <button class="btn" data-node-action="chain_delete" id="btnChainDelete" disabled>Delete Selected</button>
+            <button class="btn" data-node-action="chain_backup" id="btnChainBackup" disabled>Backup Now</button>
+          </div>
+        </div>
+        <p class="node-ctrls__status node-ctrls__status--chain" id="chainControlStatus">Chain controls unavailable</p>
       </div>
     </div>
 
@@ -268,9 +295,73 @@ const activitySeriesLabels = {
 };
 const baseChartLabels = { peers: 'Peers', latency: 'RPC Latency (ms)' };
 const NODE_CTRL_REFRESH_MS = 10000;
-const nodeControlState = { enabled:false, containers:[], lastFetched:0 };
+const nodeControlState = { enabled:false, containers:[], lastFetched:0, chainBackups:[], chainBackupsLastFetched:0, chainJob:null, chainEnabled:false };
 let nodeControlPendingMessage = null;
+let chainControlPendingMessage = null;
 const AUTO_RESTART_DEFAULT_HOURS = 6;
+
+function formatBytes(bytes){
+  const num = Number(bytes);
+  if (!Number.isFinite(num) || num < 0) return '';
+  if (num === 0) return '0 B';
+  const units = ['B','KB','MB','GB','TB'];
+  let value = num;
+  let unitIndex = 0;
+  while (value >= 1024 && unitIndex < units.length - 1){
+    value /= 1024;
+    unitIndex++;
+  }
+  const digits = value >= 100 ? 0 : value >= 10 ? 1 : 2;
+  return `${value.toFixed(digits)} ${units[unitIndex]}`;
+}
+
+function formatTimestamp(ts){
+  if (!ts) return '';
+  const date = new Date(ts);
+  if (!Number.isFinite(date.getTime())) return '';
+  return date.toLocaleString(undefined, { hour12:false });
+}
+
+function formatDuration(seconds){
+  const total = Math.max(0, Math.floor(Number(seconds) || 0));
+  const hrs = Math.floor(total / 3600);
+  const mins = Math.floor((total % 3600) / 60);
+  const secs = total % 60;
+  const pad = value => String(value).padStart(2,'0');
+  if (hrs > 0){
+    return `${hrs}:${pad(mins)}:${pad(secs)}`;
+  }
+  return `${mins}:${pad(secs)}`;
+}
+
+function formatBackupNameDisplay(name){
+  if (!name) return 'backup';
+  const match = name.match(/(\d{8}-\d{6})/);
+  if (match){
+    return match[1];
+  }
+  return name.length > 32 ? `${name.slice(0, 16)}…${name.slice(-9)}` : name;
+}
+
+function buildChainJobMessage(job){
+  if (!job) return '';
+  if (job.active && job.type === 'backup'){
+    const details = job.details || {};
+    const name = formatBackupNameDisplay(details.path);
+    const parts = [`Creating ${name}`];
+    const started = job.started ? Date.parse(job.started) : NaN;
+    if (Number.isFinite(started)){
+      const elapsedSec = Math.max(0, (Date.now() - started) / 1000);
+      parts.push(`${formatDuration(elapsedSec)} elapsed`);
+    }
+    const sizeVal = Number(details.size);
+    if (Number.isFinite(sizeVal) && sizeVal >= 0){
+      parts.push(formatBytes(sizeVal));
+    }
+    return parts.join(' · ');
+  }
+  return job.message || '';
+}
 
 const legendOffsetPlugin = {
   id: 'legendOffset',
@@ -534,6 +625,28 @@ function setNodeControlButtonsDisabled(disabled){
   }
 }
 
+function setChainControlStatus(msg, ok = true){
+  const el = document.getElementById('chainControlStatus');
+  if (!el) return;
+  el.textContent = msg || '';
+  el.style.color = ok ? 'var(--muted)' : 'var(--bad)';
+  el.style.opacity = msg ? 1 : 0;
+}
+
+function setChainControlButtonsDisabled(disabled){
+  document.querySelectorAll('#nodeControlsCard [data-node-action^="chain_"]').forEach(btn => {
+    btn.disabled = !!disabled;
+  });
+  const select = document.getElementById('chainBackupSelect');
+  if (select){
+    if (disabled){
+      select.setAttribute('disabled','disabled');
+    } else {
+      select.removeAttribute('disabled');
+    }
+  }
+}
+
 function findContainer(name){
   if (!name) return null;
   return (nodeControlState.containers || []).find(item => item && item.name === name) || null;
@@ -595,6 +708,8 @@ function renderNodeControls(errorMsg){
     if (!nodeControlPendingMessage){
       setNodeControlStatus(errorMsg, false);
     }
+    nodeControlState.chainEnabled = false;
+    renderChainControls();
     return;
   }
   if (!nodeControlState.enabled){
@@ -605,6 +720,8 @@ function renderNodeControls(errorMsg){
     }
     if (details) details.textContent = 'Auto restart: unavailable';
     setNodeControlButtonsDisabled(true);
+    nodeControlState.chainEnabled = false;
+    renderChainControls();
     return;
   }
   const containers = Array.isArray(nodeControlState.containers) ? nodeControlState.containers : [];
@@ -638,10 +755,107 @@ function renderNodeControls(errorMsg){
   const hasContainer = !!(select && select.value);
   setNodeControlButtonsDisabled(!hasContainer);
   updateNodeContainerDetails();
+  nodeControlState.chainEnabled = hasContainer;
+  renderChainControls();
   if (!hasContainer){
     setNodeControlStatus('No containers detected', false);
   } else if (!nodeControlPendingMessage){
     setNodeControlStatus('');
+  }
+}
+
+function renderChainControls(){
+  const select = document.getElementById('chainBackupSelect');
+  const backupBtn = document.getElementById('btnChainBackup');
+  const restoreBtn = document.getElementById('btnChainRestore');
+  let deleteBtn = document.getElementById('btnChainDelete');
+  if (!deleteBtn){
+    const actions = document.querySelector('#nodeControlsCard .node-ctrls__actions--chain');
+    if (actions){
+      deleteBtn = document.createElement('button');
+      deleteBtn.className = 'btn';
+      deleteBtn.id = 'btnChainDelete';
+      deleteBtn.dataset.nodeAction = 'chain_delete';
+      deleteBtn.textContent = 'Delete Selected';
+      deleteBtn.disabled = true;
+      const backupReference = document.getElementById('btnChainBackup');
+      actions.insertBefore(deleteBtn, backupReference || null);
+      deleteBtn.addEventListener('click', ev => {
+        ev.preventDefault();
+        performNodeAction('chain_delete');
+      });
+    }
+  }
+  if (!select || !backupBtn || !restoreBtn || !deleteBtn) return;
+  const backups = Array.isArray(nodeControlState.chainBackups) ? nodeControlState.chainBackups : [];
+  const previous = select.value;
+  select.innerHTML = '';
+  if (!backups.length){
+    const opt = document.createElement('option');
+    opt.value = '';
+    opt.textContent = '(no backups found)';
+    select.appendChild(opt);
+    select.disabled = true;
+  } else {
+    backups.forEach((item, index) => {
+      if (!item || !item.name) return;
+      const opt = document.createElement('option');
+      opt.value = item.name;
+      const infoParts = [];
+      if (item.modified){
+        infoParts.push(formatTimestamp(item.modified));
+      }
+      if (Number.isFinite(Number(item.size))){
+        infoParts.push(formatBytes(item.size));
+      }
+      const suffix = infoParts.length ? ` — ${infoParts.join(' • ')}` : '';
+      opt.textContent = `${item.name}${suffix}`;
+      opt.title = suffix ? suffix.replace(/^ —\s*/, '') : item.name;
+      if (previous === item.name || (!previous && index === 0)){
+        opt.selected = true;
+      }
+      select.appendChild(opt);
+    });
+    if (!select.value && backups.length){
+      select.value = backups[0].name;
+    }
+    select.disabled = !nodeControlState.chainEnabled;
+  }
+  const job = nodeControlState.chainJob || null;
+  const inProgress = !!(job && job.active);
+  const hasBackups = backups.some(item => item && item.name);
+  const jobMessage = buildChainJobMessage(job);
+  if (job && job.active && job.type === 'backup'){
+    const details = job.details || {};
+    const pendingName = formatBackupNameDisplay(details.path);
+    const pendingText = jobMessage || `Creating ${pendingName}`;
+    const pendingValue = (job.details && job.details.path) || '';
+    const pendingOpt = document.createElement('option');
+    pendingOpt.value = pendingValue;
+    pendingOpt.textContent = pendingText;
+    pendingOpt.dataset.pending = '1';
+    pendingOpt.disabled = true;
+    pendingOpt.selected = true;
+    select.insertBefore(pendingOpt, select.firstChild || null);
+  }
+  if (inProgress){
+    setChainControlStatus(jobMessage || job.message || `Chain ${job.type || 'operation'} in progress…`, job.status !== 'error');
+    backupBtn.disabled = true;
+    restoreBtn.disabled = true;
+    deleteBtn.disabled = true;
+    select.disabled = true;
+  } else {
+    const enabled = !!nodeControlState.chainEnabled;
+    backupBtn.disabled = !enabled;
+    restoreBtn.disabled = !enabled || !select.value || !hasBackups;
+    deleteBtn.disabled = !enabled || !select.value || !hasBackups;
+    if (job && (jobMessage || job.message)){
+      setChainControlStatus(jobMessage || job.message, job.status !== 'error');
+    } else if (!enabled){
+      setChainControlStatus('Select a container to manage chain backups.', false);
+    } else {
+      setChainControlStatus(hasBackups ? 'Ready.' : 'No backups found.', hasBackups);
+    }
   }
 }
 
@@ -666,6 +880,30 @@ async function refreshNodeControls(force = false){
     console.warn('[node-controls] failed to load containers', err);
     renderNodeControls('Node controls unavailable');
   }
+  await refreshChainBackups(force);
+}
+
+async function refreshChainBackups(force = false){
+  const now = Date.now();
+  if (!force && now - (nodeControlState.chainBackupsLastFetched || 0) < NODE_CTRL_REFRESH_MS){
+    return;
+  }
+  try{
+    const res = await fetch('/api/chain/backups', { cache:'no-store' });
+    if (!res.ok){
+      throw new Error(`HTTP ${res.status}`);
+    }
+    const data = await res.json();
+    nodeControlState.chainBackups = Array.isArray(data?.backups) ? data.backups : [];
+    nodeControlState.chainJob = data?.job || null;
+    nodeControlState.chainBackupsLastFetched = Date.now();
+    renderChainControls();
+  }catch(err){
+    nodeControlState.chainBackups = [];
+    nodeControlState.chainJob = { active:false, status:'error', message:'Chain backup info unavailable' };
+    nodeControlState.chainBackupsLastFetched = Date.now();
+    renderChainControls();
+  }
 }
 
 async function performNodeAction(action){
@@ -675,18 +913,24 @@ async function performNodeAction(action){
     stop:'docker_stop',
     auto_enable:'auto_restart_enable',
     auto_disable:'auto_restart_disable',
+    chain_backup:'chain_backup',
+    chain_restore:'chain_restore',
+    chain_delete:'chain_delete',
   };
   const select = document.getElementById('nodeContainerSelect');
+  const isChainAction = action === 'chain_backup' || action === 'chain_restore' || action === 'chain_delete';
+  const statusSetter = isChainAction ? setChainControlStatus : setNodeControlStatus;
   if (!ACTION_MAP[action]){
-    setNodeControlStatus('Unsupported action', false);
+    statusSetter('Unsupported action', false);
     return;
   }
   if (!select || !select.value){
-    setNodeControlStatus('Select a container first', false);
+    statusSetter('Select a container first', false);
     return;
   }
   const container = select.value;
   const hoursInput = document.getElementById('autoRestartHours');
+  const backupSelect = document.getElementById('chainBackupSelect');
   let successLabel = action.charAt(0).toUpperCase() + action.slice(1);
   let statusMessage = `${successLabel} ${container}`;
   const payload = { action: ACTION_MAP[action], container };
@@ -702,12 +946,34 @@ async function performNodeAction(action){
   } else if (action === 'auto_disable'){
     successLabel = 'Auto restart disabled';
     statusMessage = `Disabling auto restart for ${container}`;
+  } else if (action === 'chain_backup'){
+    successLabel = 'Chain backup';
+    statusMessage = `Creating chain backup for ${container}`;
+  } else if (action === 'chain_restore'){
+    if (!backupSelect || !backupSelect.value){
+      setChainControlStatus('Select a backup to restore', false);
+      return;
+    }
+    payload.backup = backupSelect.value;
+    successLabel = 'Chain restore';
+    statusMessage = `Restoring ${backupSelect.value}`;
+  } else if (action === 'chain_delete'){
+    if (!backupSelect || !backupSelect.value){
+      setChainControlStatus('Select a backup to delete', false);
+      return;
+    }
+    payload.backup = backupSelect.value;
+    successLabel = 'Chain delete';
+    statusMessage = `Deleting ${backupSelect.value}`;
   }
   let finalMessage = '';
   let finalOk = true;
   try{
     setNodeControlButtonsDisabled(true);
-    setNodeControlStatus(`${statusMessage}…`);
+    if (isChainAction){
+      setChainControlButtonsDisabled(true);
+    }
+    statusSetter(`${statusMessage}…`);
     const res = await fetch('/api/control', {
       method:'POST',
       headers:{'content-type':'application/json'},
@@ -730,7 +996,11 @@ async function performNodeAction(action){
     finalMessage = err && err.message ? err.message : 'Action failed';
     finalOk = false;
   }finally{
-    nodeControlPendingMessage = { text: finalMessage, ok: finalOk };
+    if (isChainAction){
+      chainControlPendingMessage = { text: finalMessage, ok: finalOk };
+    } else {
+      nodeControlPendingMessage = { text: finalMessage, ok: finalOk };
+    }
     nodeControlState.lastFetched = 0;
     try{
       await refreshNodeControls(true);
@@ -738,7 +1008,12 @@ async function performNodeAction(action){
       console.warn('[node-controls] refresh after action failed', refreshErr);
       renderNodeControls('Node controls unavailable');
     }
-    if (nodeControlPendingMessage){
+    if (isChainAction){
+      if (chainControlPendingMessage){
+        setChainControlStatus(chainControlPendingMessage.text, chainControlPendingMessage.ok);
+        chainControlPendingMessage = null;
+      }
+    } else if (nodeControlPendingMessage){
       setNodeControlStatus(nodeControlPendingMessage.text, nodeControlPendingMessage.ok);
       nodeControlPendingMessage = null;
     }
@@ -766,6 +1041,8 @@ function wireNodeControls(){
   });
   renderNodeControls();
   setNodeControlStatus('Loading containers…');
+  setChainControlStatus('Loading chain backups…');
+  refreshChainBackups(true);
 }
 
 function formatHeightLabel(value){

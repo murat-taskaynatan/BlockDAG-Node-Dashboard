@@ -1,5 +1,6 @@
 import os, time, json, threading, shutil, subprocess, math
 from datetime import datetime, timezone
+from pathlib import Path
 from collections import deque
 from flask import Flask, jsonify, render_template, request
 
@@ -34,6 +35,23 @@ STALL_THRESHOLD_MS = int(os.getenv("DASH_STALL_THRESHOLD_MS", "180000"))
 SYNC_RATE_THRESHOLD = float(os.getenv("DASH_SYNC_RATE_THRESHOLD", "0.3"))
 DOWNLOAD_RATE_THRESHOLD = float(os.getenv("DASH_DOWNLOAD_RATE_THRESHOLD", "1.0"))
 MINING_RATE_THRESHOLD = float(os.getenv("DASH_MINING_RATE_THRESHOLD", "0.1"))
+
+CHAIN_DATA_DIR = Path(os.getenv("BDAG_CHAIN_DATA_DIR", "/home/blockdag/blockdag-scripts/bin/bdag/data")).expanduser().resolve()
+CHAIN_BACKUP_DIR = Path(os.getenv("BDAG_CHAIN_BACKUP_DIR", os.path.expanduser("~/backups"))).expanduser().resolve()
+CHAIN_BACKUP_PREFIX = (os.getenv("BDAG_CHAIN_BACKUP_PREFIX", "blockdag-chaindata") or "blockdag-chaindata").strip() or "blockdag-chaindata"
+CHAIN_BACKUP_SUFFIX = (os.getenv("BDAG_CHAIN_BACKUP_SUFFIX", ".tar.gz") or ".tar.gz").strip()
+CHAIN_BACKUP_MAX = max(0, int(os.getenv("BDAG_CHAIN_BACKUP_MAX", "0")))
+
+_chain_job_lock = threading.Lock()
+_chain_job_state = {
+    "active": False,
+    "type": None,
+    "status": "idle",
+    "message": "",
+    "started": None,
+    "ended": None,
+    "details": None,
+}
 
 
 def _sanitize_unit_name(name):
@@ -1239,9 +1257,384 @@ def docker_action(name, action):
     except Exception as e:
         return {"ok":False, "error":str(e)}
 
+
+def _chain_job_snapshot():
+    with _chain_job_lock:
+        return dict(_chain_job_state)
+
+
+def _chain_job_start(job_type: str, message: str, details=None):
+    now = datetime.utcnow().replace(tzinfo=timezone.utc).isoformat()
+    with _chain_job_lock:
+        if _chain_job_state.get("active"):
+            raise RuntimeError(f"Chain data operation already in progress ({_chain_job_state.get('type')})")
+        _chain_job_state.update({
+            "active": True,
+            "type": job_type,
+            "status": "running",
+            "message": message,
+            "started": now,
+            "ended": None,
+            "details": details or {},
+        })
+
+
+def _chain_job_finish(status: str, message: str, details=None):
+    ended = datetime.utcnow().replace(tzinfo=timezone.utc).isoformat()
+    with _chain_job_lock:
+        _chain_job_state.update({
+            "active": False,
+            "status": status,
+            "message": message,
+            "ended": ended,
+            "details": details or _chain_job_state.get("details"),
+        })
+
+
+def _chain_job_progress(message: str, details=None):
+    with _chain_job_lock:
+        if not _chain_job_state.get("active"):
+            return
+        _chain_job_state["message"] = message
+        if details:
+            current = dict(_chain_job_state.get("details") or {})
+            current.update(details)
+            _chain_job_state["details"] = current
+
+
+def _ensure_backup_dir():
+    CHAIN_BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def _is_container_running(name: str) -> bool:
+    if not name or not ALLOW_DOCKER:
+        return False
+    try:
+        out = subprocess.check_output(["docker", "inspect", "-f", "{{.State.Running}}", name], text=True, timeout=5)
+        return out.strip().lower() == "true"
+    except Exception:
+        return False
+
+
+def _stop_container_for_job(name: str) -> bool:
+    if not name or not ALLOW_DOCKER:
+        return False
+    if not _is_container_running(name):
+        return False
+    result = docker_action(name, "stop")
+    if not result.get("ok"):
+        raise RuntimeError(result.get("error") or f"Failed to stop container {name}")
+    return True
+
+
+def _start_container_for_job(name: str) -> bool:
+    if not name or not ALLOW_DOCKER:
+        return False
+    result = docker_action(name, "start")
+    if not result.get("ok"):
+        raise RuntimeError(result.get("error") or f"Failed to restart container {name}")
+    return True
+
+
+def _unique_temp_path(base: Path) -> Path:
+    candidate = base
+    counter = 1
+    while candidate.exists():
+        candidate = base.parent / f"{base.name}-{counter}"
+        counter += 1
+    return candidate
+
+
+def _format_bytes(num: float) -> str:
+    try:
+        value = float(num)
+    except Exception:
+        value = 0.0
+    if not math.isfinite(value) or value <= 0:
+        return "0 B"
+    units = ["B", "KB", "MB", "GB", "TB", "PB"]
+    idx = 0
+    while value >= 1024 and idx < len(units) - 1:
+        value /= 1024.0
+        idx += 1
+    if idx == 0:
+        return f"{int(value)} {units[idx]}"
+    return f"{value:.1f} {units[idx]}"
+
+
+def _parse_backup_timestamp(name: str):
+    if not name:
+        return None
+    prefix = f"{CHAIN_BACKUP_PREFIX}-"
+    suffix = CHAIN_BACKUP_SUFFIX
+    if not name.startswith(prefix) or not name.endswith(suffix):
+        return None
+    ts_part = name[len(prefix):-len(suffix)] if suffix else name[len(prefix):]
+    try:
+        return datetime.strptime(ts_part, "%Y%m%d-%H%M%S").replace(tzinfo=timezone.utc)
+    except Exception:
+        return None
+
+
+def _format_backup_progress_message(dest_name: str, size_bytes: int = 0) -> str:
+    ts = _parse_backup_timestamp(dest_name)
+    return f"Creating {dest_name}"
+
+
+def list_chain_backups():
+    try:
+        _ensure_backup_dir()
+    except Exception:
+        return []
+    pattern = f"{CHAIN_BACKUP_PREFIX}-*{CHAIN_BACKUP_SUFFIX}"
+    backups = []
+    try:
+        candidates = sorted(CHAIN_BACKUP_DIR.glob(pattern), key=lambda p: p.stat().st_mtime, reverse=True)
+    except Exception:
+        candidates = []
+    for path in candidates:
+        try:
+            stat = path.stat()
+        except OSError:
+            continue
+        backups.append({
+            "name": path.name,
+            "size": stat.st_size,
+            "modified": datetime.fromtimestamp(stat.st_mtime, timezone.utc).isoformat(),
+        })
+    return backups
+
+
+def _prune_chain_backups():
+    if CHAIN_BACKUP_MAX <= 0:
+        return
+    backups = list_chain_backups()
+    for item in backups[CHAIN_BACKUP_MAX:]:
+        if not item or not item.get("name"):
+            continue
+        try:
+            (CHAIN_BACKUP_DIR / item["name"]).unlink(missing_ok=True)
+        except Exception:
+            app.logger.warning("Failed to prune backup %s", item["name"], exc_info=True)
+
+
+def _chain_backup_task(container_name: str):
+    was_running = False
+    dest_path = None
+    details = {"container": container_name}
+    status = "error"
+    message = ''
+    try:
+        _ensure_backup_dir()
+        if not CHAIN_DATA_DIR.exists():
+            raise RuntimeError(f"Chain data directory not found: {CHAIN_DATA_DIR}")
+        was_running = _stop_container_for_job(container_name)
+        timestamp = datetime.utcnow().strftime("%Y%m%d-%H%M%S")
+        dest_name = f"{CHAIN_BACKUP_PREFIX}-{timestamp}{CHAIN_BACKUP_SUFFIX}"
+        dest_path = CHAIN_BACKUP_DIR / dest_name
+        _chain_job_progress(_format_backup_progress_message(dest_name, 0), {"path": dest_name})
+        parent = CHAIN_DATA_DIR.parent
+        arcname = CHAIN_DATA_DIR.name
+        proc = subprocess.Popen(
+            ["tar", "-czf", str(dest_path), "-C", str(parent), arcname],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True
+        )
+        stdout = ''
+        stderr = ''
+        while True:
+            try:
+                out, err = proc.communicate(timeout=1)
+                stdout = out or ''
+                stderr = err or ''
+                break
+            except subprocess.TimeoutExpired:
+                try:
+                    size_bytes = dest_path.stat().st_size if dest_path and dest_path.exists() else 0
+                except Exception:
+                    size_bytes = 0
+                progress_details = {"path": dest_name}
+                if size_bytes:
+                    progress_details["size"] = size_bytes
+                _chain_job_progress(_format_backup_progress_message(dest_name, size_bytes), progress_details)
+                continue
+        if proc.returncode != 0:
+            raise RuntimeError(stderr.strip() or stdout.strip() or "Backup command failed")
+        size = dest_path.stat().st_size
+        details.update({"path": dest_name, "size": size})
+        status = "success"
+        message = f"Backup created: {dest_name}"
+    except Exception as exc:
+        message = str(exc)
+        if dest_path and dest_path.exists():
+            dest_path.unlink(missing_ok=True)
+        if dest_path:
+            details.setdefault("path", dest_path.name)
+    finally:
+        restart_error = None
+        if was_running:
+            try:
+                _start_container_for_job(container_name)
+            except Exception as exc:
+                restart_error = str(exc)
+        if restart_error:
+            message = f"{message} (failed to restart container: {restart_error})"
+            status = "error"
+        _chain_job_finish(status, message, details=details)
+        if status == "success":
+            _prune_chain_backups()
+
+
+def _chain_restore_task(container_name: str, backup_name: str):
+    was_running = False
+    temp_backup = None
+    details = {"container": container_name, "backup": backup_name}
+    status = "error"
+    message = ''
+    backup_path = (CHAIN_BACKUP_DIR / backup_name).resolve()
+    try:
+        _ensure_backup_dir()
+        root = CHAIN_BACKUP_DIR.resolve()
+        try:
+            backup_path.relative_to(root)
+        except ValueError:
+            raise RuntimeError("Invalid backup selection")
+        if not backup_path.exists():
+            raise RuntimeError(f"Backup not found: {backup_name}")
+        parent = CHAIN_DATA_DIR.parent
+        parent.mkdir(parents=True, exist_ok=True)
+        was_running = _stop_container_for_job(container_name)
+        if CHAIN_DATA_DIR.exists():
+            temp_backup = _unique_temp_path(parent / f"{CHAIN_DATA_DIR.name}.pre-restore")
+            shutil.move(str(CHAIN_DATA_DIR), str(temp_backup))
+        result = subprocess.run(
+            ["tar", "-xzf", str(backup_path), "-C", str(parent)],
+            capture_output=True,
+            text=True
+        )
+        if result.returncode != 0:
+            raise RuntimeError(result.stderr.strip() or result.stdout.strip() or "Restore command failed")
+        status = "success"
+        message = f"Restored from {backup_name}"
+        details["restored"] = backup_name
+        if temp_backup and temp_backup.exists():
+            shutil.rmtree(temp_backup, ignore_errors=True)
+            temp_backup = None
+    except Exception as exc:
+        message = str(exc)
+        if temp_backup and temp_backup.exists() and not CHAIN_DATA_DIR.exists():
+            shutil.move(str(temp_backup), str(CHAIN_DATA_DIR))
+            temp_backup = None
+    finally:
+        restart_error = None
+        if temp_backup and temp_backup.exists() and not CHAIN_DATA_DIR.exists():
+            shutil.move(str(temp_backup), str(CHAIN_DATA_DIR))
+            temp_backup = None
+        if was_running:
+            try:
+                _start_container_for_job(container_name)
+            except Exception as exc:
+                restart_error = str(exc)
+        if restart_error:
+            message = f"{message} (failed to restart container: {restart_error})"
+            status = "error"
+        _chain_job_finish(status, message, details=details)
+
+
+def _chain_delete_task(container_name: str, backup_name: str):
+    details = {"container": container_name, "backup": backup_name}
+    status = "error"
+    message = ''
+    try:
+        _ensure_backup_dir()
+        root = CHAIN_BACKUP_DIR.resolve()
+        backup_path = (CHAIN_BACKUP_DIR / backup_name).resolve()
+        try:
+            backup_path.relative_to(root)
+        except ValueError:
+            raise RuntimeError("Invalid backup selection")
+        if not backup_path.exists():
+            raise RuntimeError(f"Backup not found: {backup_name}")
+        backup_path.unlink()
+        details["deleted"] = backup_name
+        status = "success"
+        message = f"Deleted backup {backup_name}"
+    except Exception as exc:
+        message = str(exc)
+    finally:
+        _chain_job_finish(status, message, details=details)
+
+
+def trigger_chain_backup(container_name: str):
+    try:
+        _ensure_backup_dir()
+    except Exception as exc:
+        return False, str(exc)
+    note = f"Preparing chain backup for {container_name}" if container_name else "Preparing chain backup"
+    try:
+        _chain_job_start("backup", f"{note}…", {"container": container_name})
+    except RuntimeError as exc:
+        return False, str(exc)
+    thread = threading.Thread(target=_chain_backup_task, args=(container_name,), daemon=True)
+    thread.start()
+    return True, "Chain backup started"
+
+
+def trigger_chain_restore(container_name: str, backup_name: str):
+    try:
+        _ensure_backup_dir()
+    except Exception as exc:
+        return False, str(exc)
+    backup_path = (CHAIN_BACKUP_DIR / backup_name).resolve()
+    try:
+        backup_path.relative_to(CHAIN_BACKUP_DIR.resolve())
+    except ValueError:
+        return False, "Invalid backup selection"
+    if not backup_path.exists():
+        return False, f"Backup not found: {backup_name}"
+    note = f"Restoring chain data from {backup_name}" if backup_name else "Restoring chain data"
+    try:
+        _chain_job_start("restore", f"{note}…", {"container": container_name, "backup": backup_name})
+    except RuntimeError as exc:
+        return False, str(exc)
+    thread = threading.Thread(target=_chain_restore_task, args=(container_name, backup_name), daemon=True)
+    thread.start()
+    return True, "Chain restore started"
+
+
+def trigger_chain_delete(container_name: str, backup_name: str):
+    try:
+        _ensure_backup_dir()
+    except Exception as exc:
+        return False, str(exc)
+    backup_path = (CHAIN_BACKUP_DIR / backup_name).resolve()
+    try:
+        backup_path.relative_to(CHAIN_BACKUP_DIR.resolve())
+    except ValueError:
+        return False, "Invalid backup selection"
+    if not backup_path.exists():
+        return False, f"Backup not found: {backup_name}"
+    note = f"Deleting chain backup {backup_name}" if backup_name else "Deleting chain backup"
+    try:
+        _chain_job_start("delete", f"{note}…", {"container": container_name, "backup": backup_name})
+    except RuntimeError as exc:
+        return False, str(exc)
+    thread = threading.Thread(target=_chain_delete_task, args=(container_name, backup_name), daemon=True)
+    thread.start()
+    return True, "Chain backup deletion started"
+
 @app.route("/api/containers")
 def api_containers():
     return jsonify({"enabled": ENABLE_CONTROL and bool(ALLOW_DOCKER), "containers": docker_list()})
+
+
+@app.route("/api/chain/backups")
+def api_chain_backups():
+    return jsonify({
+        "backups": list_chain_backups(),
+        "job": _chain_job_snapshot(),
+    })
 
 @app.route("/api/control", methods=["POST"])
 def api_control():
@@ -1280,6 +1673,21 @@ def api_control():
         except Exception as exc:
             return jsonify({"ok": False, "error": str(exc)}), 400
         return jsonify({"ok": True, "message": "Auto restart disabled"})
+    elif action == "chain_backup":
+        ok, msg = trigger_chain_backup(name)
+        return (jsonify({"ok": ok, "message": msg}), 200 if ok else 400)
+    elif action == "chain_restore":
+        backup_name = (body.get("backup") or "").strip()
+        if not backup_name:
+            return jsonify({"ok": False, "error": "missing backup name"}), 400
+        ok, msg = trigger_chain_restore(name, backup_name)
+        return (jsonify({"ok": ok, "message": msg}), 200 if ok else 400)
+    elif action == "chain_delete":
+        backup_name = (body.get("backup") or "").strip()
+        if not backup_name:
+            return jsonify({"ok": False, "error": "missing backup name"}), 400
+        ok, msg = trigger_chain_delete(name, backup_name)
+        return (jsonify({"ok": ok, "message": msg}), 200 if ok else 400)
     elif action == "sample_now":
         ok, ht, *_ = sample_once()
         return jsonify({"ok": ok, "health_text": ht})
