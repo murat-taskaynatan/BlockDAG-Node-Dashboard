@@ -24,7 +24,7 @@
   .header{display:flex;align-items:center;gap:10px;justify-content:space-between;margin-bottom:16px;padding:0 8px;}
   .header img{border-radius:6px;height:36px;width:36px}
 /* node-controls-toolbar */
-.node-ctrls{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin-top:12px;align-items:end}
+.node-ctrls{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));column-gap:12px;row-gap:8px;margin-top:12px;align-items:end}
 .node-ctrls .btn{padding:.4rem .6rem;border:1px solid #3a4a7a;border-radius:.6rem;background:transparent;color:inherit;cursor:pointer}
 .node-ctrls .btn:disabled{opacity:.5;cursor:not-allowed}
 .node-ctrls .sp{opacity:.7;margin:0 .2rem;grid-column:1/-1}
@@ -33,7 +33,7 @@
 .node-ctrls input{background:transparent;border:1px solid #3a4a7a;border-radius:.6rem;padding:.35rem .6rem;color:inherit}
 .node-ctrls select{width:100%;appearance:none;background-color:rgba(255,255,255,.06);border:1px solid #3a4a7a;border-radius:.6rem;padding:.35rem .6rem;color:var(--text);background-image:linear-gradient(45deg,transparent 50%,currentColor 50%),linear-gradient(135deg,currentColor 50%,transparent 50%);background-position:calc(100% - 18px) calc(50% - 3px),calc(100% - 12px) calc(50% - 3px);background-size:6px 6px;background-repeat:no-repeat;padding-right:1.8rem}
 .node-ctrls select option{background-color:var(--card);color:var(--text)}
-#nodeControlsCard .node-ctrls--node{display:grid;grid-template-columns:minmax(220px,1.4fr) minmax(200px,1fr) minmax(160px,.9fr) minmax(140px,auto) minmax(200px,.9fr) minmax(160px,.7fr);gap:12px;align-items:end}
+#nodeControlsCard .node-ctrls--node{display:grid;grid-template-columns:minmax(220px,1.4fr) minmax(200px,1fr) minmax(160px,.9fr) minmax(140px,auto) minmax(200px,.9fr) minmax(160px,.7fr);column-gap:12px;row-gap:4px;align-items:end}
 #nodeControlsCard .node-ctrls__field{display:flex;flex-direction:column;gap:4px;min-width:0}
 #nodeControlsCard .node-ctrls__field span{opacity:.7}
 #nodeControlsCard .node-ctrls__field select{width:100%}
@@ -45,8 +45,8 @@
 #nodeControlsCard .node-ctrls__btn--auto-disable{min-width:110px}
 #nodeControlsCard .node-ctrls__meta{align-self:center;justify-self:end;text-align:right;margin:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 #nodeControlsCard .node-ctrls__meta--status{justify-self:start;text-align:left}
-#nodeControlsCard .node-ctrls__row{grid-column:1/-1;display:grid;gap:12px;align-items:end}
-#nodeControlsCard .node-ctrls__row--chain{margin-top:8px;grid-template-columns:minmax(220px,1.4fr) minmax(220px,auto) minmax(240px,1fr)}
+#nodeControlsCard .node-ctrls__row{grid-column:1/-1;display:grid;gap:6px;align-items:end}
+#nodeControlsCard .node-ctrls__row--chain{margin-top:2px;grid-template-columns:minmax(240px,1.4fr) minmax(220px,auto) minmax(240px,1fr)}
 #nodeControlsCard .node-ctrls__field--chain{display:flex;flex-direction:column;gap:4px;min-width:0}
 #nodeControlsCard .node-ctrls__field--chain span{opacity:.7}
 #nodeControlsCard .node-ctrls__field--chain select{width:100%}
