@@ -34,6 +34,42 @@ sudo mkdir -p "$INSTALL_DIR"
 sudo chown "$SERVICE_USER":"$SERVICE_GROUP" "$INSTALL_DIR"
 rsync -a --delete "$TEMP_ROOT/repo/" "$INSTALL_DIR/"
 
+ENV_DIR="/etc/blockdag-dashboard"
+ENV_FILE="$ENV_DIR/dashboard.env"
+sudo mkdir -p "$ENV_DIR"
+
+service_home="$(getent passwd "$SERVICE_USER" | cut -d: -f6)"
+if [[ -z "$service_home" ]]; then
+  service_home="$(eval echo "~$SERVICE_USER")"
+fi
+default_chain_data="${BDAG_CHAIN_DATA_DIR:-${service_home%/}/blockdag-scripts/bin/bdag/data}"
+default_chain_backups="${BDAG_CHAIN_BACKUP_DIR:-${service_home%/}/blockdag-scripts/backups}"
+
+if [[ ! -f "$ENV_FILE" ]]; then
+  sudo tee "$ENV_FILE" >/dev/null <<EOF
+# BlockDAG Dashboard Environment
+HOST=${HOST:-0.0.0.0}
+PORT=${PORT:-8080}
+BDAG_RPC_BASE=${BDAG_RPC_BASE:-http://127.0.0.1:18545}
+BDAG_RPC_USER=${BDAG_RPC_USER:-}
+BDAG_RPC_PASS=${BDAG_RPC_PASS:-}
+EOF
+  sudo chmod 600 "$ENV_FILE"
+fi
+
+ensure_env_value(){
+  local key="$1"
+  local value="$2"
+  if sudo grep -q "^${key}=" "$ENV_FILE"; then
+    sudo sed -i "s|^${key}=.*|${key}=${value}|" "$ENV_FILE"
+  else
+    echo "${key}=${value}" | sudo tee -a "$ENV_FILE" >/dev/null
+  fi
+}
+
+ensure_env_value "BDAG_CHAIN_DATA_DIR" "$default_chain_data"
+ensure_env_value "BDAG_CHAIN_BACKUP_DIR" "$default_chain_backups"
+
 printf "[3/7] Bootstrapping virtual environment...\n"
 "$PYTHON_BIN" -m venv "$INSTALL_DIR/.venv"
 source "$INSTALL_DIR/.venv/bin/activate"
