@@ -345,8 +345,9 @@ function formatBackupNameDisplay(name){
 
 function buildChainJobMessage(job){
   if (!job) return '';
-  if (job.active && job.type === 'backup'){
-    const details = job.details || {};
+  const details = job.details || {};
+  const isRunning = !!(job.active || job.status === 'running');
+  if (isRunning && job.type === 'backup'){
     const name = formatBackupNameDisplay(details.path);
     const parts = [`Creating backup ${name}`];
     const started = job.started ? Date.parse(job.started) : NaN;
@@ -357,6 +358,16 @@ function buildChainJobMessage(job){
     const sizeVal = Number(details.size);
     if (Number.isFinite(sizeVal) && sizeVal >= 0){
       parts.push(formatBytes(sizeVal));
+    }
+    return parts.join(' · ');
+  } else if (isRunning && job.type === 'restore'){
+    const name = formatBackupNameDisplay(details.backup || details.restored || details.path);
+    const label = name ? `Restoring ${name}` : 'Restoring backup';
+    const parts = [label];
+    const started = job.started ? Date.parse(job.started) : NaN;
+    if (Number.isFinite(started)){
+      const elapsedSec = Math.max(0, (Date.now() - started) / 1000);
+      parts.push(`${formatDuration(elapsedSec)} elapsed`);
     }
     return parts.join(' · ');
   }
@@ -788,6 +799,12 @@ function renderChainControls(){
   }
   if (!select || !backupBtn || !restoreBtn || !deleteBtn) return;
   const backups = Array.isArray(nodeControlState.chainBackups) ? nodeControlState.chainBackups : [];
+  const job = nodeControlState.chainJob || null;
+  const jobActive = !!(job && (job.active || job.status === 'running'));
+  const jobType = jobActive ? job.type : (job ? job.type : '');
+  const jobMessage = buildChainJobMessage(job);
+  const restoreTarget = (jobActive && jobType === 'restore') ? (job.details && (job.details.backup || job.details.restored || job.details.path)) : '';
+  const restoreLabel = restoreTarget ? (jobMessage || `Restoring ${formatBackupNameDisplay(restoreTarget)}`) : (jobMessage || 'Restoring backup');
   const previous = select.value;
   select.innerHTML = '';
   if (!backups.length){
@@ -809,7 +826,14 @@ function renderChainControls(){
         infoParts.push(formatBytes(item.size));
       }
       const suffix = infoParts.length ? ` — ${infoParts.join(' • ')}` : '';
-      opt.textContent = `${item.name}${suffix}`;
+      let textContent = `${item.name}${suffix}`;
+      if (restoreTarget && item.name === restoreTarget){
+        const base = formatBackupNameDisplay(item.name);
+        textContent = jobMessage || `Restoring ${base}`;
+        opt.dataset.pending = '1';
+        opt.disabled = true;
+      }
+      opt.textContent = textContent;
       opt.title = suffix ? suffix.replace(/^ —\s*/, '') : item.name;
       if (previous === item.name || (!previous && index === 0)){
         opt.selected = true;
@@ -820,12 +844,16 @@ function renderChainControls(){
       select.value = backups[0].name;
     }
     select.disabled = !nodeControlState.chainEnabled;
+    if (restoreTarget){
+      const restoreOpt = Array.from(select.options || []).find(opt => opt.value === restoreTarget);
+      if (restoreOpt){
+        restoreOpt.selected = true;
+        select.value = restoreOpt.value;
+      }
+    }
   }
-  const job = nodeControlState.chainJob || null;
-  const inProgress = !!(job && job.active);
   const hasBackups = backups.some(item => item && item.name);
-  const jobMessage = buildChainJobMessage(job);
-  if (job && job.active && job.type === 'backup'){
+  if (jobActive && jobType === 'backup'){
     const details = job.details || {};
     const pendingName = formatBackupNameDisplay(details.path);
     const pendingText = jobMessage || `Creating backup ${pendingName}`;
@@ -837,9 +865,10 @@ function renderChainControls(){
     pendingOpt.disabled = true;
     pendingOpt.selected = true;
     select.insertBefore(pendingOpt, select.firstChild || null);
+    select.value = pendingOpt.value;
   }
-  if (inProgress){
-    setChainControlStatus(jobMessage || job.message || `Chain ${job.type || 'operation'} in progress…`, job.status !== 'error');
+  if (jobActive){
+    setChainControlStatus(jobMessage || job.message || `Chain ${jobType || 'operation'} in progress…`, job.status !== 'error');
     backupBtn.disabled = true;
     restoreBtn.disabled = true;
     deleteBtn.disabled = true;
@@ -957,6 +986,14 @@ async function performNodeAction(action){
     payload.backup = backupSelect.value;
     successLabel = 'Chain restore';
     statusMessage = `Restoring ${backupSelect.value}`;
+    const selectedOpt = backupSelect.options[backupSelect.selectedIndex] || null;
+    if (selectedOpt){
+      const displayName = formatBackupNameDisplay(payload.backup);
+      selectedOpt.textContent = `Restoring ${displayName}…`;
+      selectedOpt.dataset.pending = '1';
+      selectedOpt.disabled = true;
+    }
+    backupSelect.disabled = true;
   } else if (action === 'chain_delete'){
     if (!backupSelect || !backupSelect.value){
       setChainControlStatus('Select a backup to delete', false);
@@ -997,23 +1034,26 @@ async function performNodeAction(action){
     finalOk = false;
   }finally{
     if (isChainAction){
-      chainControlPendingMessage = { text: finalMessage, ok: finalOk };
-    } else {
-      nodeControlPendingMessage = { text: finalMessage, ok: finalOk };
-    }
-    nodeControlState.lastFetched = 0;
+  chainControlPendingMessage = { text: finalMessage, ok: finalOk };
+} else {
+  nodeControlPendingMessage = { text: finalMessage, ok: finalOk };
+}
+nodeControlState.lastFetched = 0;
     try{
       await refreshNodeControls(true);
     }catch(refreshErr){
       console.warn('[node-controls] refresh after action failed', refreshErr);
       renderNodeControls('Node controls unavailable');
     }
-    if (isChainAction){
-      if (chainControlPendingMessage){
-        setChainControlStatus(chainControlPendingMessage.text, chainControlPendingMessage.ok);
-        chainControlPendingMessage = null;
-      }
-    } else if (nodeControlPendingMessage){
+if (isChainAction){
+  if (chainControlPendingMessage){
+    setChainControlStatus(chainControlPendingMessage.text, chainControlPendingMessage.ok);
+    chainControlPendingMessage = null;
+  }
+  if (action === 'chain_restore'){
+    try{ await refreshChainBackups(true); }catch(_){/* ignore */}
+  }
+} else if (nodeControlPendingMessage){
       setNodeControlStatus(nodeControlPendingMessage.text, nodeControlPendingMessage.ok);
       nodeControlPendingMessage = null;
     }
