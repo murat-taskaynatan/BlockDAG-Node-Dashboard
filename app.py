@@ -1858,7 +1858,9 @@ def healthz():
     return "ok\n", 200, {"content-type":"text/plain; charset=utf-8"}
 
 if __name__ == "__main__":
-    app.run("0.0.0.0", 8080)
+    host = os.getenv("HOST", "0.0.0.0")
+    port = int(os.getenv("PORT", "6061"))
+    app.run(host, port)
 
 def _sample_once():
     # simple sampler heartbeat

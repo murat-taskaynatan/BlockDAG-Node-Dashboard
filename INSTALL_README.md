@@ -98,7 +98,7 @@ REPO_BRANCH=main \
      ```
 
 3. **Open firewall/port**
-   - Dashboard listens on TCP `8080` by default. Allow inbound access if needed.
+   - Dashboard listens on TCP `6061` by default. Allow inbound access if needed.
 
 4. **Check logs**
    - `journalctl -u blockdag-dashboard -f`

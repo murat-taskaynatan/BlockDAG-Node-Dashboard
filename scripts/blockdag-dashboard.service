@@ -8,7 +8,7 @@ Wants=network-online.target
 Type=simple
 WorkingDirectory=/opt/blockdag-dashboard
 Environment=HOST=0.0.0.0
-Environment=PORT=8080
+Environment=PORT=6061
 EnvironmentFile=-/etc/blockdag-dashboard/dashboard.env
 Environment=PYTHONPATH=/opt/blockdag-dashboard
 Environment="PYTHONWARNINGS=ignore:Unverified HTTPS request"
