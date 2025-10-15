@@ -3,7 +3,7 @@ set -euo pipefail
 
 REPO_URL="${REPO_URL:-https://github.com/murat-taskaynatan/BlockDAG-Node-Dashboard.git}"
 # Allow callers to set either REPO_REF (preferred) or legacy REPO_BRANCH; default to latest release tag.
-REPO_REF="${REPO_REF:-${REPO_BRANCH:-v1.3.0}}"
+REPO_REF="${REPO_REF:-${REPO_BRANCH:-v1.3.5}}"
 INSTALL_DIR="${INSTALL_DIR:-/opt/blockdag-dashboard}"
 SERVICE_NAME="${SERVICE_NAME:-blockdag-dashboard.service}"
 SYSTEMD_DIR="${SYSTEMD_DIR:-/etc/systemd/system}"
