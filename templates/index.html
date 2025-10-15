@@ -50,9 +50,9 @@
 #nodeControlsCard .node-ctrls__meta--status{justify-self:start;text-align:left}
 #nodeControlsCard .node-ctrls__row{grid-column:1/-1;display:grid;gap:6px;align-items:end}
 #nodeControlsCard .node-ctrls__row--chain{margin-top:2px;display:flex;gap:12px;align-items:flex-end;flex-wrap:nowrap}
-#nodeControlsCard .node-ctrls__field--chain{display:flex;flex-direction:column;gap:4px;min-width:0;flex:1 1 420px}
+#nodeControlsCard .node-ctrls__field--chain{display:flex;flex-direction:column;gap:4px;min-width:0;flex:1 1 460px;max-width:460px}
 #nodeControlsCard .node-ctrls__field--chain span{opacity:.7}
-#nodeControlsCard .node-ctrls__field--chain select{width:100%;min-width:0}
+#nodeControlsCard .node-ctrls__field--chain select{width:100%;min-width:0;max-width:460px}
 #nodeControlsCard .node-ctrls__actions--chain{display:flex;gap:8px;align-items:center;justify-content:flex-start;flex-wrap:nowrap;flex:0 0 auto}
 #nodeControlsCard .node-ctrls__actions--chain .btn{min-width:110px;flex:0 0 auto;white-space:nowrap}
 #nodeControlsCard .node-ctrls__status{display:none}
@@ -63,6 +63,8 @@
   #nodeControlsCard .node-ctrls__btn--auto-apply,#nodeControlsCard .node-ctrls__btn--auto-disable{width:100%;min-width:0}
   #nodeControlsCard .node-ctrls__meta{grid-column:1/-1;justify-self:start;text-align:left;white-space:normal}
   #nodeControlsCard .node-ctrls__row--chain{flex-wrap:wrap}
+  #nodeControlsCard .node-ctrls__field--chain{flex:1 1 100%;max-width:100%}
+  #nodeControlsCard .node-ctrls__field--chain select{max-width:100%}
   #nodeControlsCard .node-ctrls__status--chain{text-align:left}
   #nodeControlsCard .node-ctrls__actions--chain{justify-content:flex-start;flex-wrap:wrap}
   #nodeControlsCard .node-ctrls__actions--chain .btn{flex:1 1 140px}
