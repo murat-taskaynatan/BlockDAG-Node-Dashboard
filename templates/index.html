@@ -80,6 +80,7 @@
 .activity-kvs{flex:1 1 320px;display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:8px}
 .activity-controls{flex:1 1 280px}
 .activity-controls .node-ctrls{margin-top:0}
+#versionBadge{position:fixed;bottom:12px;right:12px;font-size:11px;color:var(--muted);background:rgba(0,0,0,.35);padding:4px 10px;border-radius:999px;letter-spacing:.08em;text-transform:uppercase;opacity:.75;pointer-events:none;backdrop-filter:blur(6px)}
   .log-output{background:rgba(33,24,0,.45);border-radius:12px;padding:12px;margin:0;font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono","Courier New",monospace;font-size:12px;line-height:1.4;white-space:pre-wrap;word-break:break-word;max-height:252px;overflow-y:auto;border:1px solid rgba(255,167,38,.35);color:#ffb74d;scrollbar-width:thin;scrollbar-color:#20263d rgba(255,255,255,0.16);}
   .log-output::-webkit-scrollbar{width:8px;height:8px}
   .log-output::-webkit-scrollbar-track{background:rgba(255,255,255,0.16);border-radius:8px}
@@ -1699,5 +1700,6 @@ const pollMs = Number(window.POLL_INTERVAL || 2000) || 2000;
   setInterval(refreshLogs, logsInterval);
 })();
 </script>
+<div id="versionBadge">{{ app_version|default('n/a') }}</div>
 <script>window.POLL_INTERVAL = {{ poll_interval_ms | safe }};</script>
 <script src="/config.js"></script>

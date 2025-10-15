@@ -35,6 +35,7 @@ STALL_THRESHOLD_MS = int(os.getenv("DASH_STALL_THRESHOLD_MS", "180000"))
 SYNC_RATE_THRESHOLD = float(os.getenv("DASH_SYNC_RATE_THRESHOLD", "0.3"))
 DOWNLOAD_RATE_THRESHOLD = float(os.getenv("DASH_DOWNLOAD_RATE_THRESHOLD", "1.0"))
 MINING_RATE_THRESHOLD = float(os.getenv("DASH_MINING_RATE_THRESHOLD", "0.1"))
+APP_VERSION = os.getenv("BDAG_DASH_VERSION", "v1.3.5").strip() or "v1.3.5"
 
 CHAIN_DATA_DIR = Path(os.getenv("BDAG_CHAIN_DATA_DIR", "/home/blockdag/blockdag-scripts/bin/bdag/data")).expanduser().resolve()
 CHAIN_BACKUP_DIR = Path(os.getenv("BDAG_CHAIN_BACKUP_DIR", os.path.expanduser("~/backups"))).expanduser().resolve()
@@ -1041,7 +1042,7 @@ def _set_window_minutes(minutes:int):
 # ----- Pages -----
 @app.route("/")
 def index():
-    return render_template("index.html")
+    return render_template("index.html", app_version=APP_VERSION)
 
 # ----- Status & charts -----
 @app.route("/api/status")
