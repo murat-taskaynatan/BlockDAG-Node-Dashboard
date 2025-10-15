@@ -26,7 +26,10 @@
 /* node-controls-toolbar */
 .node-ctrls{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));column-gap:12px;row-gap:8px;margin-top:12px;align-items:end}
 .node-ctrls .btn{padding:.4rem .6rem;border:1px solid #3a4a7a;border-radius:.6rem;background:transparent;color:inherit;cursor:pointer}
-.node-ctrls .btn:disabled{opacity:.5;cursor:not-allowed}
+.node-ctrls .btn--danger{border-color:#ff5370;color:#ff5370}
+.node-ctrls .btn--danger:hover:not(:disabled){background:rgba(255,83,112,.12)}
+.node-ctrls .btn--danger:disabled{color:rgba(255,83,112,.45);border-color:rgba(255,83,112,.35)}
+.node-ctrls .btn:disabled{opacity:.5;cursor:default}
 .node-ctrls .sp{opacity:.7;margin:0 .2rem;grid-column:1/-1}
 .node-ctrls label{display:flex;flex-direction:column;gap:4px;font-size:11px;text-transform:uppercase;letter-spacing:.06em}
 .node-ctrls label span{opacity:.7}
@@ -46,10 +49,10 @@
 #nodeControlsCard .node-ctrls__meta{align-self:center;justify-self:start;text-align:left;margin:0 0 0 6px;font-size:12px;line-height:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 #nodeControlsCard .node-ctrls__meta--status{justify-self:start;text-align:left}
 #nodeControlsCard .node-ctrls__row{grid-column:1/-1;display:grid;gap:6px;align-items:end}
-#nodeControlsCard .node-ctrls__row--chain{margin-top:2px;grid-template-columns:minmax(240px,1.4fr) minmax(220px,auto) minmax(240px,1fr)}
+#nodeControlsCard .node-ctrls__row--chain{margin-top:2px;grid-template-columns:minmax(320px,1.6fr) minmax(220px,auto) minmax(240px,1fr)}
 #nodeControlsCard .node-ctrls__field--chain{display:flex;flex-direction:column;gap:4px;min-width:0}
 #nodeControlsCard .node-ctrls__field--chain span{opacity:.7}
-#nodeControlsCard .node-ctrls__field--chain select{width:100%}
+#nodeControlsCard .node-ctrls__field--chain select{width:100%;min-width:320px}
 #nodeControlsCard .node-ctrls__actions--chain{display:flex;gap:8px;align-items:center;justify-content:flex-end;flex-wrap:nowrap}
 #nodeControlsCard .node-ctrls__actions--chain .btn{min-width:100px}
 #nodeControlsCard .node-ctrls__status{display:none}
@@ -59,7 +62,7 @@
   #nodeControlsCard .node-ctrls__actions .btn{flex:1 1 120px}
   #nodeControlsCard .node-ctrls__btn--auto-apply,#nodeControlsCard .node-ctrls__btn--auto-disable{width:100%;min-width:0}
   #nodeControlsCard .node-ctrls__meta{grid-column:1/-1;justify-self:start;text-align:left;white-space:normal}
-  #nodeControlsCard .node-ctrls__row--chain{grid-template-columns:repeat(auto-fit,minmax(240px,1fr))}
+  #nodeControlsCard .node-ctrls__row--chain{grid-template-columns:repeat(auto-fit,minmax(320px,1fr))}
   #nodeControlsCard .node-ctrls__status--chain{text-align:left}
   #nodeControlsCard .node-ctrls__actions--chain{justify-content:flex-start;flex-wrap:wrap}
   #nodeControlsCard .node-ctrls__actions--chain .btn{flex:1 1 140px}
@@ -131,7 +134,7 @@
           <input type="number" id="autoRestartHours" min="1" step="1" value="6">
         </label>
         <button class="btn node-ctrls__btn node-ctrls__btn--auto-apply" data-node-action="auto_enable" id="btnAutoRestartEnable" disabled>Apply</button>
-        <button class="btn node-ctrls__btn node-ctrls__btn--auto-disable" data-node-action="auto_disable" id="btnAutoRestartDisable" disabled>Disable</button>
+        <button class="btn btn--danger node-ctrls__btn node-ctrls__btn--auto-disable" data-node-action="auto_disable" id="btnAutoRestartDisable" disabled>Disable</button>
         <span class="node-ctrls__meta" id="nodeContainerDetails">Auto restart: —</span>
         <span class="node-ctrls__meta node-ctrls__meta--status" id="nodeControlStatus"></span>
         <div class="node-ctrls__row node-ctrls__row--chain">
@@ -145,6 +148,7 @@
             <button class="btn" data-node-action="chain_restore" id="btnChainRestore" disabled>Restore Selected</button>
             <button class="btn" data-node-action="chain_delete" id="btnChainDelete" disabled>Delete Selected</button>
             <button class="btn" data-node-action="chain_backup" id="btnChainBackup" disabled>Backup Now</button>
+            <button class="btn btn--danger" data-node-action="chain_cancel" id="btnChainCancel" disabled>Stop</button>
           </div>
         </div>
         <p class="node-ctrls__status node-ctrls__status--chain" id="chainControlStatus">Chain controls unavailable</p>
@@ -345,6 +349,9 @@ function formatBackupNameDisplay(name){
 
 function buildChainJobMessage(job){
   if (!job) return '';
+  if (job.status === 'cancelling'){
+    return job.message || 'Canceling chain backup operation…';
+  }
   const details = job.details || {};
   const isRunning = !!(job.active || job.status === 'running');
   if (isRunning && job.type === 'backup'){
@@ -684,8 +691,17 @@ function updateNodeContainerDetails(){
   const select = document.getElementById('nodeContainerSelect');
   const details = document.getElementById('nodeContainerDetails');
   const hoursInput = document.getElementById('autoRestartHours');
+  const disableBtn = document.getElementById('btnAutoRestartDisable');
   if (!details) return;
-  if (!select || !select.value){
+  const hasSelection = !!(select && select.value);
+  if (disableBtn){
+    disableBtn.classList.add('btn--danger');
+    if (!hasSelection){
+      disableBtn.disabled = true;
+      disableBtn.title = 'Select a container first';
+    }
+  }
+  if (!hasSelection){
     details.textContent = 'Auto restart: Disabled';
     if (hoursInput) hoursInput.value = AUTO_RESTART_DEFAULT_HOURS;
     return;
@@ -699,6 +715,12 @@ function updateNodeContainerDetails(){
     } else {
       hoursInput.value = AUTO_RESTART_DEFAULT_HOURS;
     }
+  }
+  if (disableBtn){
+    const auto = entry && entry.auto_restart ? entry.auto_restart : null;
+    const canDisable = !!(auto && auto.installed && (auto.enabled || auto.active));
+    disableBtn.disabled = !canDisable;
+    disableBtn.title = canDisable ? 'Disable auto restart' : 'Auto restart already disabled';
   }
 }
 
@@ -779,6 +801,7 @@ function renderChainControls(){
   const select = document.getElementById('chainBackupSelect');
   const backupBtn = document.getElementById('btnChainBackup');
   const restoreBtn = document.getElementById('btnChainRestore');
+  const cancelBtn = document.getElementById('btnChainCancel');
   let deleteBtn = document.getElementById('btnChainDelete');
   if (!deleteBtn){
     const actions = document.querySelector('#nodeControlsCard .node-ctrls__actions--chain');
@@ -797,11 +820,12 @@ function renderChainControls(){
       });
     }
   }
-  if (!select || !backupBtn || !restoreBtn || !deleteBtn) return;
+  if (!select || !backupBtn || !restoreBtn || !deleteBtn || !cancelBtn) return;
   const backups = Array.isArray(nodeControlState.chainBackups) ? nodeControlState.chainBackups : [];
   const job = nodeControlState.chainJob || null;
   const jobActive = !!(job && (job.active || job.status === 'running'));
   const jobType = jobActive ? job.type : (job ? job.type : '');
+  const jobCancelling = !!(job && job.status === 'cancelling');
   const jobMessage = buildChainJobMessage(job);
   const restoreTarget = (jobActive && jobType === 'restore') ? (job.details && (job.details.backup || job.details.restored || job.details.path)) : '';
   const restoreLabel = restoreTarget ? (jobMessage || `Restoring ${formatBackupNameDisplay(restoreTarget)}`) : (jobMessage || 'Restoring backup');
@@ -872,12 +896,16 @@ function renderChainControls(){
     backupBtn.disabled = true;
     restoreBtn.disabled = true;
     deleteBtn.disabled = true;
+    cancelBtn.disabled = jobCancelling;
+    cancelBtn.textContent = jobCancelling ? 'Stopping…' : 'Stop';
     select.disabled = true;
   } else {
     const enabled = !!nodeControlState.chainEnabled;
     backupBtn.disabled = !enabled;
     restoreBtn.disabled = !enabled || !select.value || !hasBackups;
     deleteBtn.disabled = !enabled || !select.value || !hasBackups;
+    cancelBtn.disabled = true;
+    cancelBtn.textContent = 'Stop';
     if (job && (jobMessage || job.message)){
       setChainControlStatus(jobMessage || job.message, job.status !== 'error');
     } else if (!enabled){
@@ -945,19 +973,26 @@ async function performNodeAction(action){
     chain_backup:'chain_backup',
     chain_restore:'chain_restore',
     chain_delete:'chain_delete',
+    chain_cancel:'chain_cancel',
   };
   const select = document.getElementById('nodeContainerSelect');
-  const isChainAction = action === 'chain_backup' || action === 'chain_restore' || action === 'chain_delete';
+  const isChainAction = action.startsWith('chain_');
   const statusSetter = isChainAction ? setChainControlStatus : setNodeControlStatus;
   if (!ACTION_MAP[action]){
     statusSetter('Unsupported action', false);
     return;
   }
-  if (!select || !select.value){
+  let container = (select && select.value) ? select.value : '';
+  if (action === 'chain_cancel' && !container){
+    const job = nodeControlState.chainJob || null;
+    if (job && job.details && job.details.container){
+      container = job.details.container;
+    }
+  }
+  if (!container){
     statusSetter('Select a container first', false);
     return;
   }
-  const container = select.value;
   const hoursInput = document.getElementById('autoRestartHours');
   const backupSelect = document.getElementById('chainBackupSelect');
   let successLabel = action.charAt(0).toUpperCase() + action.slice(1);
@@ -1002,6 +1037,9 @@ async function performNodeAction(action){
     payload.backup = backupSelect.value;
     successLabel = 'Chain delete';
     statusMessage = `Deleting ${backupSelect.value}`;
+  } else if (action === 'chain_cancel'){
+    successLabel = 'Chain cancel';
+    statusMessage = container ? `Stopping chain operation for ${container}` : 'Stopping chain operation';
   }
   let finalMessage = '';
   let finalOk = true;

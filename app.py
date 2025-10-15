@@ -53,6 +53,31 @@ _chain_job_state = {
     "details": None,
 }
 
+class ChainJobCancelled(Exception):
+    pass
+
+_chain_job_cancel_event = threading.Event()
+_chain_job_context = {"thread": None, "process": None}
+
+
+def _check_chain_job_cancelled():
+    if _chain_job_cancel_event.is_set():
+        raise ChainJobCancelled("Chain job cancelled")
+
+
+def _chain_job_set_thread(thread):
+    with _chain_job_lock:
+        _chain_job_context["thread"] = thread
+
+
+def _chain_job_set_process(proc):
+    with _chain_job_lock:
+        _chain_job_context["process"] = proc
+
+
+def _chain_job_clear_process():
+    with _chain_job_lock:
+        _chain_job_context["process"] = None
 
 def _sanitize_unit_name(name):
     raw = (name or "").strip().lower()
@@ -1268,6 +1293,9 @@ def _chain_job_start(job_type: str, message: str, details=None):
     with _chain_job_lock:
         if _chain_job_state.get("active"):
             raise RuntimeError(f"Chain data operation already in progress ({_chain_job_state.get('type')})")
+        _chain_job_cancel_event.clear()
+        _chain_job_context["thread"] = None
+        _chain_job_context["process"] = None
         _chain_job_state.update({
             "active": True,
             "type": job_type,
@@ -1289,6 +1317,9 @@ def _chain_job_finish(status: str, message: str, details=None):
             "ended": ended,
             "details": details or _chain_job_state.get("details"),
         })
+        _chain_job_context["thread"] = None
+        _chain_job_context["process"] = None
+        _chain_job_cancel_event.clear()
 
 
 def _chain_job_progress(message: str, details=None):
@@ -1425,10 +1456,13 @@ def _chain_backup_task(container_name: str):
     status = "error"
     message = ''
     try:
+        _check_chain_job_cancelled()
         _ensure_backup_dir()
         if not CHAIN_DATA_DIR.exists():
             raise RuntimeError(f"Chain data directory not found: {CHAIN_DATA_DIR}")
+        _check_chain_job_cancelled()
         was_running = _stop_container_for_job(container_name)
+        _check_chain_job_cancelled()
         timestamp = datetime.utcnow().strftime("%Y%m%d-%H%M%S")
         dest_name = f"{CHAIN_BACKUP_PREFIX}-{timestamp}{CHAIN_BACKUP_SUFFIX}"
         dest_path = CHAIN_BACKUP_DIR / dest_name
@@ -1441,30 +1475,50 @@ def _chain_backup_task(container_name: str):
             stderr=subprocess.PIPE,
             text=True
         )
+        _chain_job_set_process(proc)
         stdout = ''
         stderr = ''
-        while True:
-            try:
-                out, err = proc.communicate(timeout=1)
-                stdout = out or ''
-                stderr = err or ''
-                break
-            except subprocess.TimeoutExpired:
+        try:
+            while True:
+                if _chain_job_cancel_event.is_set():
+                    proc.terminate()
+                    try:
+                        proc.wait(timeout=3)
+                    except subprocess.TimeoutExpired:
+                        proc.kill()
+                    raise ChainJobCancelled("Chain backup cancelled")
                 try:
-                    size_bytes = dest_path.stat().st_size if dest_path and dest_path.exists() else 0
-                except Exception:
-                    size_bytes = 0
-                progress_details = {"path": dest_name}
-                if size_bytes:
-                    progress_details["size"] = size_bytes
-                _chain_job_progress(_format_backup_progress_message(dest_name, size_bytes), progress_details)
-                continue
+                    out, err = proc.communicate(timeout=1)
+                    stdout = out or ''
+                    stderr = err or ''
+                    break
+                except subprocess.TimeoutExpired:
+                    try:
+                        size_bytes = dest_path.stat().st_size if dest_path and dest_path.exists() else 0
+                    except Exception:
+                        size_bytes = 0
+                    progress_details = {"path": dest_name}
+                    if size_bytes:
+                        progress_details["size"] = size_bytes
+                    _chain_job_progress(_format_backup_progress_message(dest_name, size_bytes), progress_details)
+                    continue
+        finally:
+            _chain_job_clear_process()
         if proc.returncode != 0:
             raise RuntimeError(stderr.strip() or stdout.strip() or "Backup command failed")
+        _check_chain_job_cancelled()
         size = dest_path.stat().st_size
         details.update({"path": dest_name, "size": size})
         status = "success"
         message = f"Backup created: {dest_name}"
+    except ChainJobCancelled as exc:
+        message = str(exc) or "Chain backup cancelled"
+        status = "cancelled"
+        if dest_path and dest_path.exists():
+            dest_path.unlink(missing_ok=True)
+        if dest_path:
+            details.setdefault("path", dest_path.name)
+        details["cancelled"] = True
     except Exception as exc:
         message = str(exc)
         if dest_path and dest_path.exists():
@@ -1494,6 +1548,7 @@ def _chain_restore_task(container_name: str, backup_name: str):
     message = ''
     backup_path = (CHAIN_BACKUP_DIR / backup_name).resolve()
     try:
+        _check_chain_job_cancelled()
         _ensure_backup_dir()
         root = CHAIN_BACKUP_DIR.resolve()
         try:
@@ -1502,24 +1557,56 @@ def _chain_restore_task(container_name: str, backup_name: str):
             raise RuntimeError("Invalid backup selection")
         if not backup_path.exists():
             raise RuntimeError(f"Backup not found: {backup_name}")
+        _check_chain_job_cancelled()
         parent = CHAIN_DATA_DIR.parent
         parent.mkdir(parents=True, exist_ok=True)
         was_running = _stop_container_for_job(container_name)
+        _check_chain_job_cancelled()
         if CHAIN_DATA_DIR.exists():
             temp_backup = _unique_temp_path(parent / f"{CHAIN_DATA_DIR.name}.pre-restore")
             shutil.move(str(CHAIN_DATA_DIR), str(temp_backup))
-        result = subprocess.run(
+        _check_chain_job_cancelled()
+        proc = subprocess.Popen(
             ["tar", "-xzf", str(backup_path), "-C", str(parent)],
-            capture_output=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True
         )
-        if result.returncode != 0:
-            raise RuntimeError(result.stderr.strip() or result.stdout.strip() or "Restore command failed")
+        _chain_job_set_process(proc)
+        stdout = ''
+        stderr = ''
+        try:
+            while True:
+                if _chain_job_cancel_event.is_set():
+                    proc.terminate()
+                    try:
+                        proc.wait(timeout=3)
+                    except subprocess.TimeoutExpired:
+                        proc.kill()
+                    raise ChainJobCancelled("Chain restore cancelled")
+                try:
+                    out, err = proc.communicate(timeout=1)
+                    stdout = out or ''
+                    stderr = err or ''
+                    break
+                except subprocess.TimeoutExpired:
+                    continue
+        finally:
+            _chain_job_clear_process()
+        if proc.returncode != 0:
+            raise RuntimeError(stderr.strip() or stdout.strip() or "Restore command failed")
         status = "success"
         message = f"Restored from {backup_name}"
         details["restored"] = backup_name
         if temp_backup and temp_backup.exists():
             shutil.rmtree(temp_backup, ignore_errors=True)
+            temp_backup = None
+    except ChainJobCancelled as exc:
+        message = str(exc) or "Chain restore cancelled"
+        status = "cancelled"
+        details["cancelled"] = True
+        if temp_backup and temp_backup.exists() and not CHAIN_DATA_DIR.exists():
+            shutil.move(str(temp_backup), str(CHAIN_DATA_DIR))
             temp_backup = None
     except Exception as exc:
         message = str(exc)
@@ -1547,6 +1634,7 @@ def _chain_delete_task(container_name: str, backup_name: str):
     status = "error"
     message = ''
     try:
+        _check_chain_job_cancelled()
         _ensure_backup_dir()
         root = CHAIN_BACKUP_DIR.resolve()
         backup_path = (CHAIN_BACKUP_DIR / backup_name).resolve()
@@ -1556,10 +1644,15 @@ def _chain_delete_task(container_name: str, backup_name: str):
             raise RuntimeError("Invalid backup selection")
         if not backup_path.exists():
             raise RuntimeError(f"Backup not found: {backup_name}")
+        _check_chain_job_cancelled()
         backup_path.unlink()
         details["deleted"] = backup_name
         status = "success"
         message = f"Deleted backup {backup_name}"
+    except ChainJobCancelled as exc:
+        message = str(exc) or "Chain delete cancelled"
+        status = "cancelled"
+        details["cancelled"] = True
     except Exception as exc:
         message = str(exc)
     finally:
@@ -1577,6 +1670,7 @@ def trigger_chain_backup(container_name: str):
     except RuntimeError as exc:
         return False, str(exc)
     thread = threading.Thread(target=_chain_backup_task, args=(container_name,), daemon=True)
+    _chain_job_set_thread(thread)
     thread.start()
     return True, "Chain backup started"
 
@@ -1599,6 +1693,7 @@ def trigger_chain_restore(container_name: str, backup_name: str):
     except RuntimeError as exc:
         return False, str(exc)
     thread = threading.Thread(target=_chain_restore_task, args=(container_name, backup_name), daemon=True)
+    _chain_job_set_thread(thread)
     thread.start()
     return True, "Chain restore started"
 
@@ -1621,8 +1716,33 @@ def trigger_chain_delete(container_name: str, backup_name: str):
     except RuntimeError as exc:
         return False, str(exc)
     thread = threading.Thread(target=_chain_delete_task, args=(container_name, backup_name), daemon=True)
+    _chain_job_set_thread(thread)
     thread.start()
     return True, "Chain backup deletion started"
+
+
+def cancel_chain_job(container_name: str = ""):
+    with _chain_job_lock:
+        if not _chain_job_state.get("active"):
+            return False, "No chain data operation in progress"
+        if _chain_job_cancel_event.is_set():
+            return False, "Cancellation already requested"
+        details = _chain_job_state.get("details") or {}
+        job_container = (details.get("container") or "").strip()
+        if container_name and job_container and container_name != job_container:
+            # Only log discrepancy; still allow cancel since only one job can run at a time
+            app.logger.debug(
+                "Cancelling chain job for container %s (requested container %s)",
+                job_container,
+                container_name,
+            )
+        _chain_job_cancel_event.set()
+        _chain_job_state["status"] = "cancelling"
+        _chain_job_state["message"] = "Canceling chain backup operation…"
+        merged_details = dict(details)
+        merged_details["cancel_requested"] = True
+        _chain_job_state["details"] = merged_details
+    return True, "Chain operation cancellation requested"
 
 @app.route("/api/containers")
 def api_containers():
@@ -1675,6 +1795,9 @@ def api_control():
         return jsonify({"ok": True, "message": "Auto restart disabled"})
     elif action == "chain_backup":
         ok, msg = trigger_chain_backup(name)
+        return (jsonify({"ok": ok, "message": msg}), 200 if ok else 400)
+    elif action == "chain_cancel":
+        ok, msg = cancel_chain_job(name)
         return (jsonify({"ok": ok, "message": msg}), 200 if ok else 400)
     elif action == "chain_restore":
         backup_name = (body.get("backup") or "").strip()
