@@ -2,8 +2,8 @@
 
 This guide walks through installing the BlockDAG Dashboard service on a fresh machine. It covers both deployment options shipped in this repository:
 
-- `scripts/install_dashboard.sh` – installs from a local checkout.
-- `scripts/install_from_github.sh` – clones from GitHub and installs in one step.
+- `install_dashboard.sh` – installs from a local checkout.
+- `install_from_github.sh` – clones from GitHub and installs in one step.
 
 > **Default Paths**
 > - Application files: `/opt/blockdag-dashboard`
@@ -36,7 +36,7 @@ This guide walks through installing the BlockDAG Dashboard service on a fresh ma
 Run from inside the repository:
 
 ```bash
-sudo ./scripts/install_dashboard.sh
+sudo ./install_dashboard.sh
 ```
 
 **What it does**
@@ -63,7 +63,7 @@ Example:
 
 ```bash
 sudo INSTALL_DIR=/srv/dashboard SERVICE_USER=flask \
-  ./scripts/install_dashboard.sh
+  ./install_dashboard.sh
 ```
 
 ---
@@ -74,7 +74,7 @@ This script handles cloning and installation in one step—helpful for fresh hos
 
 ```bash
 REPO_BRANCH=main \
-  ./scripts/install_from_github.sh
+  ./install_from_github.sh
 ```
 
 ---

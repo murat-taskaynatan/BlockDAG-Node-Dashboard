@@ -2,7 +2,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_SRC="$(cd "${SCRIPT_DIR}/.." && pwd)"
+REPO_SRC="$SCRIPT_DIR"
 
 INSTALL_DIR="${INSTALL_DIR:-/opt/blockdag-dashboard}"
 SERVICE_NAME="${SERVICE_NAME:-blockdag-dashboard.service}"

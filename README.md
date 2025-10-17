@@ -34,7 +34,7 @@ To install system-wide (requires sudo):
 
 ```bash
 ./scripts/setup_environment.sh
-./scripts/install_dashboard.sh
+./install_dashboard.sh
 ```
 
 The `install_dashboard.sh` script syncs the repo to `/opt/blockdag-dashboard`, installs dependencies, and optionally registers a `blockdag-dashboard.service` systemd unit (if provided).
@@ -45,14 +45,14 @@ Alternatively, install directly from GitHub (no manual clone required):
 
 ```bash
 REPO_URL=https://github.com/murat-taskaynatan/BlockDAG-Node-Dashboard.git \
-./scripts/install_from_github.sh
+./install_from_github.sh
 ```
 
 ## Repository Layout
 - `app.py` – Flask application and sampler
 - `templates/index.html` – main dashboard template
 - `static/js/app.js` – chart/UX logic
-- `scripts/install_dashboard.sh` – deployment helper
+- `install_dashboard.sh` – deployment helper
 - `scripts/setup_environment.sh` – environment bootstrapper
 
 ## Releasing
@@ -63,5 +63,4 @@ Current stable release tag: `v1.3.5`.
 git tag -a v1.x.x -m "Version 1.x.x"
 git push origin master --tags
 ```
-
 
