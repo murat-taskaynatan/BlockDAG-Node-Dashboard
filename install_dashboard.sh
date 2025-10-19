@@ -18,24 +18,50 @@ need_cmd() {
   command -v "$1" >/dev/null 2>&1 || { echo "Error: required command '$1' not found." >&2; exit 1; }
 }
 
-printf "[1/7] Verifying prerequisites...\n"
+ensure_packages() {
+  local missing=()
+  local packages=("$@")
+  if command -v apt-get >/dev/null 2>&1; then
+    for pkg in "${packages[@]}"; do
+      dpkg -s "$pkg" >/dev/null 2>&1 || missing+=("$pkg")
+    done
+    if ((${#missing[@]})); then
+      printf "Installing missing apt packages: %s\n" "${missing[*]}"
+      sudo apt-get update
+      sudo apt-get install -y "${missing[@]}"
+    fi
+  elif command -v dnf >/dev/null 2>&1; then
+    for pkg in "${packages[@]}"; do
+      rpm -q "$pkg" >/dev/null 2>&1 || missing+=("$pkg")
+    done
+    if ((${#missing[@]})); then
+      printf "Installing missing dnf packages: %s\n" "${missing[*]}"
+      sudo dnf install -y "${missing[@]}"
+    fi
+  else
+    printf "Warning: unable to auto-install packages; ensure %s are available.\n" "${packages[*]}" >&2
+  fi
+}
+
+need_cmd sudo
+printf "[1/8] Ensuring system dependencies...\n"
+ensure_packages git rsync python3 python3-venv python3-pip
 need_cmd "$PYTHON_BIN"
 need_cmd rsync
-need_cmd sudo
 need_cmd systemctl
 
-printf "[2/7] Preparing install directory %s...\n" "$INSTALL_DIR"
+printf "[2/8] Preparing install directory %s...\n" "$INSTALL_DIR"
 sudo mkdir -p "$INSTALL_DIR"
 sudo chown "$SERVICE_USER":"$SERVICE_GROUP" "$INSTALL_DIR"
 
-printf "[3/7] Syncing dashboard files from %s...\n" "$REPO_SRC"
+printf "[3/8] Syncing dashboard files from %s...\n" "$REPO_SRC"
 rsync -a --delete \
   --exclude='.git/' \
   --exclude='.venv/' \
   --exclude='__pycache__/' \
   "$REPO_SRC/" "$INSTALL_DIR/"
 
-printf "[4/7] Bootstrapping virtual environment...\n"
+printf "[4/8] Bootstrapping virtual environment...\n"
 "$PYTHON_BIN" -m venv "$INSTALL_DIR/.venv"
 source "$INSTALL_DIR/.venv/bin/activate"
 export PIP_BREAK_SYSTEM_PACKAGES=1
@@ -47,7 +73,7 @@ else
 fi
 deactivate
 
-printf "[5/7] Installing dashboard systemd service...\n"
+printf "[5/8] Installing dashboard systemd service...\n"
 service_path="$INSTALL_DIR/scripts/$SERVICE_NAME"
 if [[ -f "$service_path" ]]; then
   sudo install -m 0644 "$service_path" "$SYSTEMD_DIR/$SERVICE_NAME"
@@ -74,10 +100,8 @@ RestartSec=2
 WantedBy=multi-user.target
 EOF
 fi
-sudo systemctl daemon-reload
-sudo systemctl enable --now "$SERVICE_NAME"
 
-printf "[6/7] Installing sidecar helper...\n"
+printf "[6/8] Installing sidecar helper...\n"
 if [[ -f "$INSTALL_DIR/scripts/$SIDECAR_SCRIPT" ]]; then
   sudo install -m 0755 "$INSTALL_DIR/scripts/$SIDECAR_SCRIPT" "/usr/local/bin/$SIDECAR_SCRIPT"
 else
@@ -93,9 +117,13 @@ if [[ -f "$INSTALL_DIR/scripts/$SIDECAR_TIMER" ]]; then
 else
   echo "Warning: sidecar timer file scripts/$SIDECAR_TIMER not found." >&2
 fi
+
+printf "[7/8] Enabling services...\n"
+sudo systemctl daemon-reload
+sudo systemctl enable --now "$SERVICE_NAME"
 if systemctl list-unit-files | grep -q "^$SIDECAR_TIMER"; then
   sudo systemctl enable --now "$SIDECAR_TIMER"
 fi
 
-printf "[7/7] Installation complete.\n"
+printf "[8/8] Installation complete.\n"
 systemctl status "$SERVICE_NAME" --no-pager || true
