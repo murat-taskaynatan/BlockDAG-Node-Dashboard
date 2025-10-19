@@ -18,18 +18,46 @@ need_cmd() {
   command -v "$1" >/dev/null 2>&1 || { echo "Error: required command '$1' not found." >&2; exit 1; }
 }
 
+ensure_packages() {
+  local missing=()
+  local packages=("$@")
+  if command -v apt-get >/dev/null 2>&1; then
+    for pkg in "${packages[@]}"; do
+      dpkg -s "$pkg" >/dev/null 2>&1 || missing+=("$pkg")
+    done
+    if ((${#missing[@]})); then
+      printf "Installing missing apt packages: %s\n" "${missing[*]}"
+      sudo apt-get update
+      sudo apt-get install -y "${missing[@]}"
+    fi
+  elif command -v dnf >/dev/null 2>&1; then
+    for pkg in "${packages[@]}"; do
+      rpm -q "$pkg" >/dev/null 2>&1 || missing+=("$pkg")
+    done
+    if ((${#missing[@]})); then
+      printf "Installing missing dnf packages: %s\n" "${missing[*]}"
+      sudo dnf install -y "${missing[@]}"
+    fi
+  else
+    printf "Warning: unable to auto-install packages; ensure %s are available.\n" "${packages[*]}" >&2
+  fi
+}
+
+need_cmd sudo
+printf "[1/8] Ensuring system dependencies...\n"
+ensure_packages git rsync python3 python3-venv python3-pip
 need_cmd git
 need_cmd "$PYTHON_BIN"
 need_cmd rsync
-need_cmd sudo
+need_cmd systemctl
 
 TEMP_ROOT="$(mktemp -d)"
 trap 'rm -rf "$TEMP_ROOT"' EXIT
 
-printf "[1/7] Cloning %s (ref %s)...\n" "$REPO_URL" "$REPO_REF"
+printf "[2/8] Cloning %s (ref %s)...\n" "$REPO_URL" "$REPO_REF"
 git clone --depth 1 --branch "$REPO_REF" --single-branch "$REPO_URL" "$TEMP_ROOT/repo"
 
-printf "[2/7] Syncing files to %s...\n" "$INSTALL_DIR"
+printf "[3/8] Syncing files to %s...\n" "$INSTALL_DIR"
 sudo mkdir -p "$INSTALL_DIR"
 sudo chown "$SERVICE_USER":"$SERVICE_GROUP" "$INSTALL_DIR"
 rsync -a --delete "$TEMP_ROOT/repo/" "$INSTALL_DIR/"
@@ -70,7 +98,7 @@ ensure_env_value(){
 ensure_env_value "BDAG_CHAIN_DATA_DIR" "$default_chain_data"
 ensure_env_value "BDAG_CHAIN_BACKUP_DIR" "$default_chain_backups"
 
-printf "[3/7] Bootstrapping virtual environment...\n"
+printf "[4/8] Bootstrapping virtual environment...\n"
 "$PYTHON_BIN" -m venv "$INSTALL_DIR/.venv"
 source "$INSTALL_DIR/.venv/bin/activate"
 pip install --upgrade pip >/dev/null
@@ -83,10 +111,10 @@ deactivate
 
 service_path="$INSTALL_DIR/scripts/$SERVICE_NAME"
 if [[ -f "$service_path" ]]; then
-  printf "[4/7] Using bundled service file %s\n" "$service_path"
+  printf "[5/8] Using bundled service file %s\n" "$service_path"
   sudo install -m 0644 "$service_path" "$SYSTEMD_DIR/$SERVICE_NAME"
 else
-  printf "[4/7] Generating systemd service file...\n"
+  printf "[5/8] Generating systemd service file...\n"
   sudo tee "$SYSTEMD_DIR/$SERVICE_NAME" >/dev/null <<EOF
 [Unit]
 Description=BlockDAG Web Dashboard (Flask via Waitress)
@@ -109,7 +137,7 @@ WantedBy=multi-user.target
 EOF
 fi
 
-printf "[5/7] Installing sidecar helper...\n"
+printf "[6/8] Installing sidecar helper...\n"
 if [[ -f "$INSTALL_DIR/scripts/$SIDECAR_SCRIPT" ]]; then
   sudo install -m 0755 "$INSTALL_DIR/scripts/$SIDECAR_SCRIPT" "/usr/local/bin/$SIDECAR_SCRIPT"
 else
@@ -126,12 +154,12 @@ else
   echo "Warning: sidecar timer file scripts/$SIDECAR_TIMER not found." >&2
 fi
 
-printf "[6/7] Enabling and starting %s...\n" "$SERVICE_NAME"
+printf "[7/8] Enabling and starting %s...\n" "$SERVICE_NAME"
 sudo systemctl daemon-reload
 sudo systemctl enable --now "$SERVICE_NAME"
 if systemctl list-unit-files | grep -q "^$SIDECAR_TIMER"; then
   sudo systemctl enable --now "$SIDECAR_TIMER"
 fi
 
-printf "[7/7] Installation complete.\n"
+printf "[8/8] Installation complete.\n"
 systemctl status "$SERVICE_NAME" --no-pager || true
