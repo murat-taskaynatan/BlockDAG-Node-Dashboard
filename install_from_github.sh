@@ -43,6 +43,20 @@ ensure_packages() {
   fi
 }
 
+detect_local_ip() {
+  local ip=""
+  if command -v hostname >/dev/null 2>&1; then
+    ip="$(hostname -I 2>/dev/null | awk '{print $1}')"
+  fi
+  if [[ -z "$ip" ]] && command -v ip >/dev/null 2>&1; then
+    ip="$(ip route get 1.1.1.1 2>/dev/null | awk 'NR==1 {print $7}')"
+  fi
+  if [[ -z "$ip" ]]; then
+    ip="127.0.0.1"
+  fi
+  echo "$ip"
+}
+
 need_cmd sudo
 printf "[1/8] Ensuring system dependencies...\n"
 ensure_packages git rsync python3 python3-venv python3-pip
@@ -163,3 +177,21 @@ fi
 
 printf "[8/8] Installation complete.\n"
 systemctl status "$SERVICE_NAME" --no-pager || true
+
+dashboard_port="8080"
+if [[ -f "$ENV_FILE" ]]; then
+  env_port="$(sudo awk -F= '/^PORT=/{print $2}' "$ENV_FILE" | tail -n1)"
+  if [[ -n "${env_port:-}" ]]; then
+    dashboard_port="$env_port"
+  fi
+fi
+local_ip="$(detect_local_ip)"
+
+cat <<EOF
+
+Next steps:
+  - Dashboard URL: http://${local_ip}:${dashboard_port}
+  - Manage service: sudo systemctl {status|restart|stop} $SERVICE_NAME
+  - Update config: sudo nano $ENV_FILE
+  - Logs: journalctl -u $SERVICE_NAME -f
+EOF
