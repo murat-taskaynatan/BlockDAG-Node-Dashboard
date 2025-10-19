@@ -64,7 +64,7 @@ resolve_dashboard_host() {
   fi
   case "${host:-}" in
     ""|"0.0.0.0"|"::"|"[::]")
-      host="$(detect_local_ip)"
+      host="127.0.0.1"
       ;;
   esac
   echo "$host"
