@@ -57,6 +57,30 @@ detect_local_ip() {
   echo "$ip"
 }
 
+resolve_dashboard_host() {
+  local host="${HOST:-}"
+  if [[ -z "$host" && -f "$ENV_FILE" ]]; then
+    host="$(sudo awk -F= '/^HOST=/{print $2}' "$ENV_FILE" | tail -n1)"
+  fi
+  case "${host:-}" in
+    ""|"0.0.0.0"|"::"|"[::]")
+      host="$(detect_local_ip)"
+      ;;
+  esac
+  echo "$host"
+}
+
+resolve_dashboard_port() {
+  local port="${PORT:-}"
+  if [[ -z "$port" && -f "$ENV_FILE" ]]; then
+    port="$(sudo awk -F= '/^PORT=/{print $2}' "$ENV_FILE" | tail -n1)"
+  fi
+  if [[ -z "$port" ]]; then
+    port="8080"
+  fi
+  echo "$port"
+}
+
 need_cmd sudo
 printf "[1/8] Ensuring system dependencies...\n"
 ensure_packages git rsync python3 python3-venv python3-pip
@@ -178,19 +202,18 @@ fi
 printf "[8/8] Installation complete.\n"
 systemctl status "$SERVICE_NAME" --no-pager || true
 
-dashboard_port="8080"
-if [[ -f "$ENV_FILE" ]]; then
-  env_port="$(sudo awk -F= '/^PORT=/{print $2}' "$ENV_FILE" | tail -n1)"
-  if [[ -n "${env_port:-}" ]]; then
-    dashboard_port="$env_port"
-  fi
+dashboard_host="$(resolve_dashboard_host)"
+dashboard_port="$(resolve_dashboard_port)"
+display_host="$dashboard_host"
+if [[ "$display_host" == *:* && "$display_host" != \[* ]]; then
+  display_host="[$display_host]"
 fi
-local_ip="$(detect_local_ip)"
+dashboard_url="http://${display_host}:${dashboard_port}"
 
 cat <<EOF
 
 Next steps:
-  - Dashboard URL: http://${local_ip}:${dashboard_port}
+  - Dashboard URL: $dashboard_url
   - Manage service: sudo systemctl {status|restart|stop} $SERVICE_NAME
   - Update config: sudo nano $ENV_FILE
   - Logs: journalctl -u $SERVICE_NAME -f
