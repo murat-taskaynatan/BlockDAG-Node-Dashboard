@@ -1377,6 +1377,45 @@ def _unique_temp_path(base: Path) -> Path:
     return candidate
 
 
+def _cleanup_chain_restore_temp_dirs(parent: Path, keep=None):
+    keep = [Path(p) for p in (keep or []) if p]
+    try:
+        chain_data_resolved = CHAIN_DATA_DIR.resolve()
+    except Exception:
+        chain_data_resolved = None
+    if not CHAIN_DATA_DIR.exists() and not any(p.exists() for p in keep):
+        return
+    keep_resolved = set()
+    for item in keep:
+        try:
+            keep_resolved.add(item.resolve())
+        except Exception:
+            keep_resolved.add(item)
+    patterns = [
+        f"{CHAIN_DATA_DIR.name}.pre-restore",
+        f"{CHAIN_DATA_DIR.name}.pre-restore-*",
+        f"{CHAIN_DATA_DIR.name}.before-restore",
+        f"{CHAIN_DATA_DIR.name}.before-restore-*",
+    ]
+    for pattern in patterns:
+        for candidate in parent.glob(pattern):
+            if not candidate.exists() or not candidate.is_dir():
+                continue
+            try:
+                candidate_resolved = candidate.resolve()
+            except Exception:
+                candidate_resolved = candidate
+            if candidate_resolved == chain_data_resolved or candidate_resolved in keep_resolved:
+                continue
+            try:
+                shutil.rmtree(candidate)
+            except Exception as exc:
+                try:
+                    app.logger.warning("Failed to remove leftover chain data directory %s: %s", candidate, exc)
+                except Exception:
+                    pass
+
+
 def _format_bytes(num: float) -> str:
     try:
         value = float(num)
@@ -1548,6 +1587,7 @@ def _chain_restore_task(container_name: str, backup_name: str):
     status = "error"
     message = ''
     backup_path = (CHAIN_BACKUP_DIR / backup_name).resolve()
+    parent = CHAIN_DATA_DIR.parent
     try:
         _check_chain_job_cancelled()
         _ensure_backup_dir()
@@ -1559,8 +1599,8 @@ def _chain_restore_task(container_name: str, backup_name: str):
         if not backup_path.exists():
             raise RuntimeError(f"Backup not found: {backup_name}")
         _check_chain_job_cancelled()
-        parent = CHAIN_DATA_DIR.parent
         parent.mkdir(parents=True, exist_ok=True)
+        _cleanup_chain_restore_temp_dirs(parent, keep=[CHAIN_DATA_DIR])
         was_running = _stop_container_for_job(container_name)
         _check_chain_job_cancelled()
         if CHAIN_DATA_DIR.exists():
@@ -1628,6 +1668,13 @@ def _chain_restore_task(container_name: str, backup_name: str):
             message = f"{message} (failed to restart container: {restart_error})"
             status = "error"
         _chain_job_finish(status, message, details=details)
+        try:
+            keep_paths = [CHAIN_DATA_DIR]
+            if temp_backup and temp_backup.exists():
+                keep_paths.append(temp_backup)
+            _cleanup_chain_restore_temp_dirs(parent, keep=keep_paths)
+        except Exception:
+            app.logger.debug("Chain restore temp cleanup skipped due to error", exc_info=True)
 
 
 def _chain_delete_task(container_name: str, backup_name: str):
