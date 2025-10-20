@@ -7,7 +7,11 @@ REPO_REF="${REPO_REF:-${REPO_BRANCH:-v1.3.5}}"
 INSTALL_DIR="${INSTALL_DIR:-/opt/blockdag-dashboard}"
 SERVICE_NAME="${SERVICE_NAME:-blockdag-dashboard.service}"
 SYSTEMD_DIR="${SYSTEMD_DIR:-/etc/systemd/system}"
-SERVICE_USER="${SERVICE_USER:-$(id -un)}"
+DEFAULT_SERVICE_USER="${SUDO_USER:-$(id -un)}"
+SERVICE_USER="${SERVICE_USER:-$DEFAULT_SERVICE_USER}"
+if [[ -z "${SERVICE_GROUP:-}" ]]; then
+  SERVICE_GROUP="$(id -gn "$SERVICE_USER" 2>/dev/null || id -gn)"
+fi
 SERVICE_GROUP="${SERVICE_GROUP:-$(id -gn)}"
 PYTHON_BIN="${PYTHON_BIN:-python3}"
 SIDECAR_SCRIPT="${SIDECAR_SCRIPT:-bdag_sidecar.py}"
