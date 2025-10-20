@@ -117,6 +117,7 @@ Disable and remove units:
     sudo systemctl disable --now blockdag-dashboard.service
     sudo systemctl disable --now bdag-sidecar.timer
     sudo systemctl disable --now bdag-sidecar.service
+
   - Remove the systemd unit files and sidecar helper, then refresh systemd:
 
     sudo rm -f /etc/systemd/system/blockdag-dashboard.service
