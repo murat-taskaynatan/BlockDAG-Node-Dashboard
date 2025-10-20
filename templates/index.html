@@ -302,7 +302,7 @@ const activitySeriesLabels = {
 };
 const baseChartLabels = { peers: 'Peers', latency: 'RPC Latency (ms)' };
 const NODE_CTRL_REFRESH_MS = 10000;
-const nodeControlState = { enabled:false, containers:[], lastFetched:0, chainBackups:[], chainBackupsLastFetched:0, chainJob:null, chainEnabled:false };
+const nodeControlState = { enabled:false, hostMode:false, containers:[], lastFetched:0, chainBackups:[], chainBackupsLastFetched:0, chainJob:null, chainEnabled:false };
 let nodeControlPendingMessage = null;
 let chainControlPendingMessage = null;
 const AUTO_RESTART_DEFAULT_HOURS = 6;
@@ -732,6 +732,7 @@ function renderNodeControls(errorMsg){
   const card = document.getElementById('nodeControlsCard');
   const select = document.getElementById('nodeContainerSelect');
   const details = document.getElementById('nodeContainerDetails');
+  const hostMode = !!nodeControlState.hostMode;
   if (!card) return;
   card.hidden = false;
   if (errorMsg){
@@ -749,7 +750,7 @@ function renderNodeControls(errorMsg){
     renderChainControls();
     return;
   }
-  if (!nodeControlState.enabled){
+  if (!nodeControlState.enabled && !hostMode){
     if (select){
       select.innerHTML = '<option value=\"\">Controls disabled</option>';
       select.disabled = true;
@@ -759,6 +760,21 @@ function renderNodeControls(errorMsg){
     setNodeControlButtonsDisabled(true);
     nodeControlState.chainEnabled = false;
     renderChainControls();
+    return;
+  }
+  if (hostMode){
+    if (select){
+      select.innerHTML = '<option value=\"\">Local host (no containers)</option>';
+      select.disabled = true;
+      select.value = '';
+    }
+    if (details) details.textContent = 'Docker controls unavailable on this host.';
+    setNodeControlButtonsDisabled(true);
+    nodeControlState.chainEnabled = true;
+    renderChainControls();
+    if (!nodeControlPendingMessage){
+      setNodeControlStatus('Docker controls unavailable on this host. Chain backups are still available.', true);
+    }
     return;
   }
   const containers = Array.isArray(nodeControlState.containers) ? nodeControlState.containers : [];
@@ -932,12 +948,22 @@ async function refreshNodeControls(force = false){
       throw new Error(`HTTP ${res.status}`);
     }
     const data = await res.json();
-    nodeControlState.enabled = !!(data && data.enabled);
-    nodeControlState.containers = Array.isArray(data?.containers) ? data.containers : [];
+    const dockerEnabled = !!(data && data.enabled);
+    const hostMode = !!(data && data.host_mode);
+    const containers = Array.isArray(data?.containers) ? data.containers : [];
+    const chainEnabledFromServer = (data && Object.prototype.hasOwnProperty.call(data, 'chain_enabled'))
+      ? !!data.chain_enabled
+      : (dockerEnabled || hostMode);
+    nodeControlState.enabled = dockerEnabled;
+    nodeControlState.hostMode = hostMode;
+    nodeControlState.containers = containers;
+    nodeControlState.chainEnabled = hostMode ? true : chainEnabledFromServer;
     nodeControlState.lastFetched = Date.now();
     renderNodeControls();
   }catch(err){
     nodeControlState.enabled = false;
+    nodeControlState.hostMode = false;
+    nodeControlState.chainEnabled = false;
     nodeControlState.lastFetched = Date.now();
     console.warn('[node-controls] failed to load containers', err);
     renderNodeControls('Node controls unavailable');
@@ -982,6 +1008,7 @@ async function performNodeAction(action){
   };
   const select = document.getElementById('nodeContainerSelect');
   const isChainAction = action.startsWith('chain_');
+  const hostMode = !!nodeControlState.hostMode;
   const statusSetter = isChainAction ? setChainControlStatus : setNodeControlStatus;
   if (!ACTION_MAP[action]){
     statusSetter('Unsupported action', false);
@@ -995,13 +1022,17 @@ async function performNodeAction(action){
     }
   }
   if (!container){
-    statusSetter('Select a container first', false);
-    return;
+    if (isChainAction && hostMode){
+      container = '';
+    } else {
+      statusSetter('Select a container first', false);
+      return;
+    }
   }
   const hoursInput = document.getElementById('autoRestartHours');
   const backupSelect = document.getElementById('chainBackupSelect');
   let successLabel = action.charAt(0).toUpperCase() + action.slice(1);
-  let statusMessage = `${successLabel} ${container}`;
+  let statusMessage = container ? `${successLabel} ${container}` : successLabel;
   const payload = { action: ACTION_MAP[action], container };
   if (action === 'auto_enable'){
     const hoursVal = Number(hoursInput ? hoursInput.value : AUTO_RESTART_DEFAULT_HOURS);
@@ -1017,7 +1048,7 @@ async function performNodeAction(action){
     statusMessage = `Disabling auto restart for ${container}`;
   } else if (action === 'chain_backup'){
     successLabel = 'Chain backup';
-    statusMessage = `Creating chain backup for ${container}`;
+    statusMessage = container ? `Creating chain backup for ${container}` : 'Creating chain backup';
   } else if (action === 'chain_restore'){
     if (!backupSelect || !backupSelect.value){
       setChainControlStatus('Select a backup to restore', false);

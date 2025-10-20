@@ -1747,7 +1747,14 @@ def cancel_chain_job(container_name: str = ""):
 
 @app.route("/api/containers")
 def api_containers():
-    return jsonify({"enabled": ENABLE_CONTROL and bool(ALLOW_DOCKER), "containers": docker_list()})
+    docker_enabled = ENABLE_CONTROL and bool(ALLOW_DOCKER)
+    host_mode = ENABLE_CONTROL and not ALLOW_DOCKER
+    return jsonify({
+        "enabled": docker_enabled,
+        "chain_enabled": ENABLE_CONTROL,
+        "host_mode": host_mode,
+        "containers": docker_list() if ALLOW_DOCKER else [],
+    })
 
 
 @app.route("/api/chain/backups")
