@@ -111,18 +111,30 @@ REPO_BRANCH=main \
 Disable and remove units:
 
 ```bash
-sudo systemctl disable --now blockdag-dashboard bdag-sidecar.timer
-sudo rm /etc/systemd/system/blockdag-dashboard.service
-sudo rm /etc/systemd/system/bdag-sidecar.service
-sudo rm /etc/systemd/system/bdag-sidecar.timer
-sudo systemctl daemon-reload
+
+  - Stop and disable the services so they don’t restart:
+
+    sudo systemctl disable --now blockdag-dashboard.service
+    sudo systemctl disable --now bdag-sidecar.timer
+    sudo systemctl disable --now bdag-sidecar.service
+  - Remove the systemd unit files and sidecar helper, then refresh systemd:
+
+    sudo rm -f /etc/systemd/system/blockdag-dashboard.service
+    sudo rm -f /etc/systemd/system/bdag-sidecar.service
+    sudo rm -f /etc/systemd/system/bdag-sidecar.timer
+    sudo rm -f /usr/local/bin/bdag_sidecar.py
+    sudo systemctl daemon-reload
+    sudo systemctl reset-failed 
+ 
 ```
 
-Optional: delete application files and env directory
+Delete the dashboard application and configuration directories (adjust paths if you installed elsewhere):
 
 ```bash
 sudo rm -rf /opt/blockdag-dashboard
 sudo rm -rf /etc/blockdag-dashboard
+ - Optional cleanup: remove any custom data/backup paths you pointed the dashboard at (check /etc/blockdag-dashboard/
+    dashboard.env before deleting).
 ```
 
 ---
