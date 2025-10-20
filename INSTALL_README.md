@@ -133,8 +133,9 @@ Delete the dashboard application and configuration directories (adjust paths if 
 ```bash
 sudo rm -rf /opt/blockdag-dashboard
 sudo rm -rf /etc/blockdag-dashboard
- - Optional cleanup: remove any custom data/backup paths you pointed the dashboard at (check /etc/blockdag-dashboard/
-    dashboard.env before deleting).
+
+- Optional cleanup: remove any custom data/backup paths you pointed the dashboard at (check /etc/blockdag-dashboard/
+dashboard.env before deleting).
 ```
 
 ---
