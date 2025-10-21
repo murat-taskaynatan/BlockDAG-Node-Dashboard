@@ -2004,7 +2004,7 @@ function wireLogsPanel(){
 }
 
 const pollMs = Number(window.POLL_INTERVAL || 2000) || 2000;
-const RATE_CAP = 400;
+const RATE_CAP = 200;
 const clampRates = series => {
   if (!Array.isArray(series)) return series;
   return series.map(value => {
