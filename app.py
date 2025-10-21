@@ -1277,7 +1277,15 @@ def docker_action(name, action):
         return {"ok":False, "error":"invalid docker action"}
     try:
         out = subprocess.check_output(cmd, text=True, stderr=subprocess.STDOUT, timeout=15)
-        return {"ok":True, "output":out.strip()}
+        output = out.strip()
+        action_labels = {
+            "start": "Start complete",
+            "stop": "Stop complete",
+            "restart": "Restart complete",
+        }
+        base_message = action_labels.get(action, f"{action.capitalize()} succeeded")
+        message = f"{base_message} for {name}".strip() if name else base_message
+        return {"ok": True, "output": output, "message": message}
     except subprocess.CalledProcessError as e:
         return {"ok":False, "error":e.output.strip() or str(e)}
     except Exception as e:
