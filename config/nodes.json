@@ -3,16 +3,16 @@
     "id": "primary",
     "label": "Primary Node",
     "container": "blockdag-testnet-network",
-    "rpc_base": "http://127.0.0.1:18545",
-    "chain_data_dir": "/home/blockdag/blockdag-scripts/bin/bdag/data",
-    "chain_backup_dir": "/home/blockdag/backups"
+    "rpc_base": "${BDAG_RPC_BASE:-http://127.0.0.1:18545}",
+    "chain_data_dir": "${BDAG_CHAIN_DATA_DIR}",
+    "chain_backup_dir": "${BDAG_CHAIN_BACKUP_DIR}"
   },
   {
     "id": "node2",
     "label": "Secondary Node",
     "container": "blockdag-testnet-network-2",
-    "rpc_base": "http://127.0.0.1:18555",
-    "chain_data_dir": "/home/blockdag/blockdag-scripts/bin/bdag-node2/data",
-    "chain_backup_dir": "/home/blockdag/backups"
+    "rpc_base": "${BDAG_RPC_BASE_NODE2:-http://127.0.0.1:18555}",
+    "chain_data_dir": "${BDAG_NODE2_CHAIN_DATA_DIR:-$HOME/blockdag-scripts/bin/bdag-node2/data}",
+    "chain_backup_dir": "${BDAG_NODE2_CHAIN_BACKUP_DIR:-$BDAG_CHAIN_BACKUP_DIR}"
   }
 ]

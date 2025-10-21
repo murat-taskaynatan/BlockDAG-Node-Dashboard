@@ -1,4 +1,4 @@
-import os, time, json, threading, shutil, subprocess, math, logging
+import os, time, json, threading, shutil, subprocess, math, logging, re
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -69,6 +69,43 @@ class ChainJobCancelled(Exception):
 _chain_job_cancel_event = threading.Event()
 _chain_job_context = {"thread": None, "process": None}
 
+_ENV_VAR_PATTERN = re.compile(r"\$\{([^}:]+)(:-([^}]*))?\}")
+
+
+def _expand_env_placeholders(value: str) -> str:
+    if not isinstance(value, str):
+        return value
+
+    def repl(match: re.Match) -> str:
+        var = match.group(1)
+        default = match.group(3)
+        current = os.getenv(var)
+        if current is None or current == "":
+            return default or ""
+        return current
+
+    return _ENV_VAR_PATTERN.sub(repl, value)
+
+
+def _expand_path(raw_value, base_dir: Path | None = None) -> Path | None:
+    if raw_value is None:
+        return None
+    if isinstance(raw_value, Path):
+        path = raw_value
+    else:
+        text = str(raw_value).strip()
+        if not text:
+            return None
+        text = _expand_env_placeholders(text)
+        text = os.path.expandvars(text)
+        text = os.path.expanduser(text)
+        path = Path(text)
+    if not path.is_absolute() and base_dir:
+        path = (Path(base_dir) / path).resolve()
+    else:
+        path = path.resolve()
+    return path
+
 
 def _coerce_bool(value, default=False):
     if isinstance(value, bool):
@@ -109,6 +146,11 @@ SHARED_CHAIN_BACKUP_DIR = Path(DEFAULT_NODE_SETTINGS["chain_backup_dir"]).expand
 
 NODE_CONFIG_PATH = Path(os.getenv("BDAG_NODE_CONFIG_PATH", "") or (Path(__file__).resolve().parent / "config" / "nodes.json"))
 
+CONFIG_BASE_DIR = NODE_CONFIG_PATH.parent
+
+_DEFAULT_CHAIN_DATA_PATH = _expand_path(DEFAULT_NODE_SETTINGS["chain_data_dir"], CONFIG_BASE_DIR) or Path(DEFAULT_NODE_SETTINGS["chain_data_dir"]).expanduser().resolve()
+SHARED_CHAIN_BACKUP_DIR = _expand_path(DEFAULT_NODE_SETTINGS["chain_backup_dir"], CONFIG_BASE_DIR) or Path(DEFAULT_NODE_SETTINGS["chain_backup_dir"]).expanduser().resolve()
+
 _context_swap_lock = threading.RLock()
 
 
@@ -130,14 +172,18 @@ class NodeContext:
         self.remote_rpc_timeout = float(merged.get("remote_rpc_timeout", DEFAULT_NODE_SETTINGS["remote_rpc_timeout"]))
         self.remote_rpc_cache_sec = float(merged.get("remote_rpc_cache_sec", DEFAULT_NODE_SETTINGS["remote_rpc_cache_sec"]))
         self.remote_rpc_verify = _coerce_bool(merged.get("remote_rpc_verify", DEFAULT_NODE_SETTINGS["remote_rpc_verify"]))
-        self.chain_data_dir = Path(merged.get("chain_data_dir") or DEFAULT_NODE_SETTINGS["chain_data_dir"]).expanduser().resolve()
+
+        base_dir = CONFIG_BASE_DIR
+        chain_data_raw = merged.get("chain_data_dir") or DEFAULT_NODE_SETTINGS["chain_data_dir"]
+        chain_data_path = _expand_path(chain_data_raw, base_dir)
+        if not chain_data_path:
+            chain_data_path = _DEFAULT_CHAIN_DATA_PATH
+        self.chain_data_dir = chain_data_path
+
         requested_backup_dir = merged.get("chain_backup_dir")
         self.chain_backup_dir = SHARED_CHAIN_BACKUP_DIR
         if requested_backup_dir:
-            try:
-                requested_path = Path(requested_backup_dir).expanduser().resolve()
-            except Exception:
-                requested_path = None
+            requested_path = _expand_path(requested_backup_dir, base_dir)
             if requested_path and requested_path != SHARED_CHAIN_BACKUP_DIR:
                 try:
                     app.logger.info(
@@ -2197,19 +2243,13 @@ def _parse_backup_timestamp(name: str):
 
 
 def _format_backup_progress_message(dest_name: str, size_bytes: int = 0, elapsed_sec: float | None = None) -> str:
-    size_label = _format_bytes(size_bytes) if size_bytes else ""
-    elapsed_label = f"{elapsed_sec:.1f}s" if elapsed_sec is not None else ""
-    parts = ["Creating", dest_name]
-    if size_label:
-        parts.append(f"({size_label}")
-    if elapsed_label:
-        if size_label:
-            parts[-1] = f"{parts[-1]}, {elapsed_label})"
-        else:
-            parts.append(f"({elapsed_label})")
-    elif size_label:
-        parts[-1] = f"{parts[-1]})"
-    return " ".join(part for part in parts if part)
+    extras = []
+    if size_bytes > 0:
+        extras.append(_format_bytes(size_bytes))
+    if elapsed_sec is not None:
+        extras.append(f"{elapsed_sec:.1f}s")
+    suffix = f" ({', '.join(extras)})" if extras else ""
+    return f"Creating {dest_name}{suffix}"
 
 
 def list_chain_backups():
