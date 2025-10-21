@@ -40,7 +40,7 @@ STALL_THRESHOLD_MS = int(os.getenv("DASH_STALL_THRESHOLD_MS", "180000"))
 SYNC_RATE_THRESHOLD = float(os.getenv("DASH_SYNC_RATE_THRESHOLD", "0.3"))
 DOWNLOAD_RATE_THRESHOLD = float(os.getenv("DASH_DOWNLOAD_RATE_THRESHOLD", "1.0"))
 MINING_RATE_THRESHOLD = float(os.getenv("DASH_MINING_RATE_THRESHOLD", "0.1"))
-APP_VERSION = os.getenv("BDAG_DASH_VERSION", "v1.3.5").strip() or "v1.3.5"
+APP_VERSION = os.getenv("BDAG_DASH_VERSION", "v1.4.0-beta").strip() or "v1.4.0-beta"
 HEIGHT_JUMP_THRESHOLD = int(os.getenv("DASH_HEIGHT_JUMP_THRESHOLD", "500"))
 ACTIVITY_JUMP_THRESHOLD = float(os.getenv("DASH_ACTIVITY_JUMP_THRESHOLD", "500"))
 ACTIVITY_RATE_MAX = float(os.getenv("DASH_ACTIVITY_RATE_MAX", "200"))
@@ -307,90 +307,162 @@ def resolve_node_from_request():
     return ctx
 
 
+_CONTEXT_SWAP_KEYS = (
+    "RPC_BASE",
+    "RPC_USER",
+    "RPC_PASS",
+    "REMOTE_RPC_BASE",
+    "REMOTE_RPC_METHOD",
+    "REMOTE_RPC_TIMEOUT",
+    "REMOTE_RPC_CACHE_SEC",
+    "REMOTE_RPC_VERIFY",
+    "MINING_STATE_SYNC_CONTAINER",
+    "CHAIN_DATA_DIR",
+    "CHAIN_BACKUP_DIR",
+    "CHAIN_BACKUP_PREFIX",
+    "CHAIN_BACKUP_SUFFIX",
+    "CHAIN_BACKUP_MAX",
+    "lock",
+    "history_lock",
+    "height_series",
+    "remote_height_series",
+    "peers_series",
+    "lat_series",
+    "activity_labels",
+    "activity_mined",
+    "activity_processed",
+    "activity_sealed",
+    "_ACTIVITY_TOTALS",
+    "_ACTIVITY_TOTALS_LAST_TS",
+    "_NODE_STATE_CACHE",
+    "_NODE_STATE_DATA",
+    "_NODE_UPTIME_CACHE",
+    "_REMOTE_HEIGHT_CACHE",
+    "_MINING_STATE_SYNC_CACHE",
+    "_history_series",
+    "_history_state",
+    "_chain_job_lock",
+    "_chain_job_state",
+    "_chain_job_context",
+    "_chain_job_cancel_event",
+    "_last_sample_meta",
+    "_CHART_SAMPLER_STARTED",
+    "_height_zero_streak",
+    "_peers_zero_streak",
+    "_last_good_height",
+    "_last_good_remote_height",
+    "_last_activity_totals",
+)
+
+
+def _context_values_for(ctx: NodeContext):
+    return {
+        "RPC_BASE": ctx.rpc_base,
+        "RPC_USER": ctx.rpc_user,
+        "RPC_PASS": ctx.rpc_pass,
+        "REMOTE_RPC_BASE": ctx.remote_rpc_base,
+        "REMOTE_RPC_METHOD": ctx.remote_rpc_method,
+        "REMOTE_RPC_TIMEOUT": ctx.remote_rpc_timeout,
+        "REMOTE_RPC_CACHE_SEC": ctx.remote_rpc_cache_sec,
+        "REMOTE_RPC_VERIFY": ctx.remote_rpc_verify,
+        "MINING_STATE_SYNC_CONTAINER": ctx.container or DEFAULT_NODE_SETTINGS["container"],
+        "CHAIN_DATA_DIR": ctx.chain_data_dir,
+        "CHAIN_BACKUP_DIR": ctx.chain_backup_dir,
+        "CHAIN_BACKUP_PREFIX": ctx.chain_backup_prefix,
+        "CHAIN_BACKUP_SUFFIX": ctx.chain_backup_suffix,
+        "CHAIN_BACKUP_MAX": ctx.chain_backup_max,
+        "lock": ctx.lock,
+        "history_lock": ctx.history_lock,
+        "height_series": ctx.height_series,
+        "remote_height_series": ctx.remote_height_series,
+        "peers_series": ctx.peers_series,
+        "lat_series": ctx.lat_series,
+        "activity_labels": ctx.activity_labels,
+        "activity_mined": ctx.activity_mined,
+        "activity_processed": ctx.activity_processed,
+        "activity_sealed": ctx.activity_sealed,
+        "_ACTIVITY_TOTALS": ctx.activity_totals,
+        "_ACTIVITY_TOTALS_LAST_TS": ctx.activity_totals_last_ts,
+        "_NODE_STATE_CACHE": ctx.node_state_cache,
+        "_NODE_STATE_DATA": ctx.node_state_data,
+        "_NODE_UPTIME_CACHE": ctx.node_uptime_cache,
+        "_REMOTE_HEIGHT_CACHE": ctx.remote_height_cache,
+        "_MINING_STATE_SYNC_CACHE": ctx.mining_state_sync_cache,
+        "_history_series": ctx.history_series,
+        "_history_state": ctx.history_state,
+        "_chain_job_lock": ctx.chain_job_lock,
+        "_chain_job_state": ctx.chain_job_state,
+        "_chain_job_context": ctx.chain_job_context,
+        "_chain_job_cancel_event": ctx.chain_job_cancel_event,
+        "_last_sample_meta": ctx.last_sample_meta,
+        "_CHART_SAMPLER_STARTED": ctx.chart_sampler_started,
+        "_height_zero_streak": getattr(ctx, "height_zero_streak", 0),
+        "_peers_zero_streak": getattr(ctx, "peers_zero_streak", 0),
+        "_last_good_height": getattr(ctx, "last_good_height", 0),
+        "_last_good_remote_height": getattr(ctx, "last_good_remote_height", 0),
+        "_last_activity_totals": getattr(ctx, "last_activity_totals", {"mined": 0.0, "processed": 0.0, "sealed": 0.0}),
+    }
+
+
+def _restore_context_from_globals(ctx: NodeContext):
+    ctx.activity_totals = globals().get("_ACTIVITY_TOTALS", ctx.activity_totals)
+    ctx.activity_totals_last_ts = globals().get("_ACTIVITY_TOTALS_LAST_TS", ctx.activity_totals_last_ts)
+    ctx.node_state_cache = globals().get("_NODE_STATE_CACHE", ctx.node_state_cache)
+    ctx.node_state_data = globals().get("_NODE_STATE_DATA", ctx.node_state_data)
+    ctx.node_uptime_cache = globals().get("_NODE_UPTIME_CACHE", ctx.node_uptime_cache)
+    ctx.remote_height_cache = globals().get("_REMOTE_HEIGHT_CACHE", ctx.remote_height_cache)
+    ctx.mining_state_sync_cache = globals().get("_MINING_STATE_SYNC_CACHE", ctx.mining_state_sync_cache)
+    ctx.history_series = globals().get("_history_series", ctx.history_series)
+    ctx.history_state = globals().get("_history_state", ctx.history_state)
+    ctx.chain_job_state = globals().get("_chain_job_state", ctx.chain_job_state)
+    ctx.chain_job_context = globals().get("_chain_job_context", ctx.chain_job_context)
+    ctx.chain_job_cancel_event = globals().get("_chain_job_cancel_event", ctx.chain_job_cancel_event)
+    ctx.last_sample_meta = globals().get("_last_sample_meta", ctx.last_sample_meta)
+    ctx.chart_sampler_started = globals().get("_CHART_SAMPLER_STARTED", ctx.chart_sampler_started)
+    ctx.height_series = globals().get("height_series", ctx.height_series)
+    ctx.remote_height_series = globals().get("remote_height_series", ctx.remote_height_series)
+    ctx.peers_series = globals().get("peers_series", ctx.peers_series)
+    ctx.lat_series = globals().get("lat_series", ctx.lat_series)
+    ctx.activity_labels = globals().get("activity_labels", ctx.activity_labels)
+    ctx.activity_mined = globals().get("activity_mined", ctx.activity_mined)
+    ctx.activity_processed = globals().get("activity_processed", ctx.activity_processed)
+    ctx.activity_sealed = globals().get("activity_sealed", ctx.activity_sealed)
+    ctx.height_zero_streak = globals().get("_height_zero_streak", getattr(ctx, "height_zero_streak", 0))
+    ctx.peers_zero_streak = globals().get("_peers_zero_streak", getattr(ctx, "peers_zero_streak", 0))
+    ctx.last_good_height = globals().get("_last_good_height", getattr(ctx, "last_good_height", 0))
+    ctx.last_good_remote_height = globals().get("_last_good_remote_height", getattr(ctx, "last_good_remote_height", 0))
+    ctx.last_activity_totals = globals().get("_last_activity_totals", getattr(ctx, "last_activity_totals", {"mined": 0.0, "processed": 0.0, "sealed": 0.0}))
+
+
 @contextmanager
-def use_node_context(ctx: NodeContext):
-    with _context_swap_lock:
-        swap_map = {
-            "RPC_BASE": ctx.rpc_base,
-            "RPC_USER": ctx.rpc_user,
-            "RPC_PASS": ctx.rpc_pass,
-            "REMOTE_RPC_BASE": ctx.remote_rpc_base,
-            "REMOTE_RPC_METHOD": ctx.remote_rpc_method,
-            "REMOTE_RPC_TIMEOUT": ctx.remote_rpc_timeout,
-            "REMOTE_RPC_CACHE_SEC": ctx.remote_rpc_cache_sec,
-            "REMOTE_RPC_VERIFY": ctx.remote_rpc_verify,
-            "MINING_STATE_SYNC_CONTAINER": ctx.container or DEFAULT_NODE_SETTINGS["container"],
-            "CHAIN_DATA_DIR": ctx.chain_data_dir,
-            "CHAIN_BACKUP_DIR": ctx.chain_backup_dir,
-            "CHAIN_BACKUP_PREFIX": ctx.chain_backup_prefix,
-            "CHAIN_BACKUP_SUFFIX": ctx.chain_backup_suffix,
-            "CHAIN_BACKUP_MAX": ctx.chain_backup_max,
-            "lock": ctx.lock,
-            "history_lock": ctx.history_lock,
-            "height_series": ctx.height_series,
-            "remote_height_series": ctx.remote_height_series,
-            "peers_series": ctx.peers_series,
-            "lat_series": ctx.lat_series,
-            "activity_labels": ctx.activity_labels,
-            "activity_mined": ctx.activity_mined,
-            "activity_processed": ctx.activity_processed,
-            "activity_sealed": ctx.activity_sealed,
-            "_ACTIVITY_TOTALS": ctx.activity_totals,
-            "_ACTIVITY_TOTALS_LAST_TS": ctx.activity_totals_last_ts,
-            "_NODE_STATE_CACHE": ctx.node_state_cache,
-            "_NODE_STATE_DATA": ctx.node_state_data,
-            "_NODE_UPTIME_CACHE": ctx.node_uptime_cache,
-            "_REMOTE_HEIGHT_CACHE": ctx.remote_height_cache,
-            "_MINING_STATE_SYNC_CACHE": ctx.mining_state_sync_cache,
-            "_history_series": ctx.history_series,
-            "_history_state": ctx.history_state,
-            "_chain_job_lock": ctx.chain_job_lock,
-            "_chain_job_state": ctx.chain_job_state,
-            "_chain_job_context": ctx.chain_job_context,
-            "_chain_job_cancel_event": ctx.chain_job_cancel_event,
-            "_last_sample_meta": ctx.last_sample_meta,
-            "_CHART_SAMPLER_STARTED": ctx.chart_sampler_started,
-            "_height_zero_streak": getattr(ctx, "height_zero_streak", 0),
-            "_peers_zero_streak": getattr(ctx, "peers_zero_streak", 0),
-            "_last_good_height": getattr(ctx, "last_good_height", 0),
-            "_last_good_remote_height": getattr(ctx, "last_good_remote_height", 0),
-            "_last_activity_totals": getattr(ctx, "last_activity_totals", {"mined": 0.0, "processed": 0.0, "sealed": 0.0}),
-        }
-        previous = {key: globals().get(key) for key in swap_map}
-        for key, value in swap_map.items():
+def use_node_context(ctx: NodeContext, *, hold_lock: bool = True):
+    values = _context_values_for(ctx)
+    lock = _context_swap_lock
+    if hold_lock:
+        lock.acquire()
+        previous = {key: globals().get(key) for key in _CONTEXT_SWAP_KEYS}
+        for key, value in values.items():
             globals()[key] = value
-        try:
-            yield ctx
-        finally:
-            ctx.activity_totals = globals().get("_ACTIVITY_TOTALS", ctx.activity_totals)
-            ctx.activity_totals_last_ts = globals().get("_ACTIVITY_TOTALS_LAST_TS", ctx.activity_totals_last_ts)
-            ctx.node_state_cache = globals().get("_NODE_STATE_CACHE", ctx.node_state_cache)
-            ctx.node_state_data = globals().get("_NODE_STATE_DATA", ctx.node_state_data)
-            ctx.node_uptime_cache = globals().get("_NODE_UPTIME_CACHE", ctx.node_uptime_cache)
-            ctx.remote_height_cache = globals().get("_REMOTE_HEIGHT_CACHE", ctx.remote_height_cache)
-            ctx.mining_state_sync_cache = globals().get("_MINING_STATE_SYNC_CACHE", ctx.mining_state_sync_cache)
-            ctx.history_series = globals().get("_history_series", ctx.history_series)
-            ctx.history_state = globals().get("_history_state", ctx.history_state)
-            ctx.chain_job_state = globals().get("_chain_job_state", ctx.chain_job_state)
-            ctx.chain_job_context = globals().get("_chain_job_context", ctx.chain_job_context)
-            ctx.chain_job_cancel_event = globals().get("_chain_job_cancel_event", ctx.chain_job_cancel_event)
-            ctx.last_sample_meta = globals().get("_last_sample_meta", ctx.last_sample_meta)
-            ctx.chart_sampler_started = globals().get("_CHART_SAMPLER_STARTED", ctx.chart_sampler_started)
-            ctx.height_series = globals().get("height_series", ctx.height_series)
-            ctx.remote_height_series = globals().get("remote_height_series", ctx.remote_height_series)
-            ctx.peers_series = globals().get("peers_series", ctx.peers_series)
-            ctx.lat_series = globals().get("lat_series", ctx.lat_series)
-            ctx.activity_labels = globals().get("activity_labels", ctx.activity_labels)
-            ctx.activity_mined = globals().get("activity_mined", ctx.activity_mined)
-            ctx.activity_processed = globals().get("activity_processed", ctx.activity_processed)
-            ctx.activity_sealed = globals().get("activity_sealed", ctx.activity_sealed)
-            ctx.height_zero_streak = globals().get("_height_zero_streak", ctx.height_zero_streak)
-            ctx.peers_zero_streak = globals().get("_peers_zero_streak", ctx.peers_zero_streak)
-            ctx.last_good_height = globals().get("_last_good_height", getattr(ctx, "last_good_height", 0))
-            ctx.last_good_remote_height = globals().get("_last_good_remote_height", getattr(ctx, "last_good_remote_height", 0))
-            ctx.last_activity_totals = globals().get("_last_activity_totals", getattr(ctx, "last_activity_totals", {"mined": 0.0, "processed": 0.0, "sealed": 0.0}))
+    else:
+        lock.acquire()
+        previous = {key: globals().get(key) for key in _CONTEXT_SWAP_KEYS}
+        for key, value in values.items():
+            globals()[key] = value
+        lock.release()
+    try:
+        yield ctx
+    finally:
+        if hold_lock:
+            _restore_context_from_globals(ctx)
             for key, value in previous.items():
                 globals()[key] = value
+            lock.release()
+        else:
+            lock.acquire()
+            _restore_context_from_globals(ctx)
+            for key, value in previous.items():
+                globals()[key] = value
+            lock.release()
 
 
 # Bind default node state to global references for backward compatibility
@@ -2396,7 +2468,7 @@ def trigger_chain_backup(container_name: str, ctx: NodeContext):
         except RuntimeError as exc:
             return False, str(exc)
         def runner():
-            with use_node_context(ctx):
+            with use_node_context(ctx, hold_lock=False):
                 _chain_backup_task(target_container)
         thread = threading.Thread(target=runner, daemon=True)
         _chain_job_set_thread(thread)
@@ -2424,7 +2496,7 @@ def trigger_chain_restore(container_name: str, backup_name: str, ctx: NodeContex
         except RuntimeError as exc:
             return False, str(exc)
         def runner():
-            with use_node_context(ctx):
+            with use_node_context(ctx, hold_lock=False):
                 _chain_restore_task(target_container, backup_name)
         thread = threading.Thread(target=runner, daemon=True)
         _chain_job_set_thread(thread)
@@ -2452,7 +2524,7 @@ def trigger_chain_delete(container_name: str, backup_name: str, ctx: NodeContext
         except RuntimeError as exc:
             return False, str(exc)
         def runner():
-            with use_node_context(ctx):
+            with use_node_context(ctx, hold_lock=False):
                 _chain_delete_task(target_container, backup_name)
         thread = threading.Thread(target=runner, daemon=True)
         _chain_job_set_thread(thread)
