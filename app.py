@@ -41,6 +41,7 @@ SYNC_RATE_THRESHOLD = float(os.getenv("DASH_SYNC_RATE_THRESHOLD", "0.3"))
 DOWNLOAD_RATE_THRESHOLD = float(os.getenv("DASH_DOWNLOAD_RATE_THRESHOLD", "1.0"))
 MINING_RATE_THRESHOLD = float(os.getenv("DASH_MINING_RATE_THRESHOLD", "0.1"))
 APP_VERSION = os.getenv("BDAG_DASH_VERSION", "v1.4.0-beta").strip() or "v1.4.0-beta"
+APP_VERSION_DISPLAY = APP_VERSION.replace("-", " ")
 HEIGHT_JUMP_THRESHOLD = int(os.getenv("DASH_HEIGHT_JUMP_THRESHOLD", "500"))
 ACTIVITY_JUMP_THRESHOLD = float(os.getenv("DASH_ACTIVITY_JUMP_THRESHOLD", "500"))
 ACTIVITY_RATE_MAX = float(os.getenv("DASH_ACTIVITY_RATE_MAX", "200"))
@@ -1682,7 +1683,7 @@ def _set_window_minutes(minutes:int):
 # ----- Pages -----
 @app.route("/")
 def index():
-    return render_template("index.html", app_version=APP_VERSION)
+    return render_template("index.html", app_version=APP_VERSION, app_version_display=APP_VERSION_DISPLAY)
 
 # ----- Status & charts -----
 @app.route("/api/status")
