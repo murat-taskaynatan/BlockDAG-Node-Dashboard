@@ -2196,9 +2196,20 @@ def _parse_backup_timestamp(name: str):
         return None
 
 
-def _format_backup_progress_message(dest_name: str, size_bytes: int = 0) -> str:
-    ts = _parse_backup_timestamp(dest_name)
-    return f"Creating {dest_name}"
+def _format_backup_progress_message(dest_name: str, size_bytes: int = 0, elapsed_sec: float | None = None) -> str:
+    size_label = _format_bytes(size_bytes) if size_bytes else ""
+    elapsed_label = f"{elapsed_sec:.1f}s" if elapsed_sec is not None else ""
+    parts = ["Creating", dest_name]
+    if size_label:
+        parts.append(f"({size_label}")
+    if elapsed_label:
+        if size_label:
+            parts[-1] = f"{parts[-1]}, {elapsed_label})"
+        else:
+            parts.append(f"({elapsed_label})")
+    elif size_label:
+        parts[-1] = f"{parts[-1]})"
+    return " ".join(part for part in parts if part)
 
 
 def list_chain_backups():
@@ -2255,7 +2266,8 @@ def _chain_backup_task(container_name: str):
         timestamp = datetime.utcnow().strftime("%Y%m%d-%H%M%S")
         dest_name = f"{CHAIN_BACKUP_PREFIX}-{timestamp}{CHAIN_BACKUP_SUFFIX}"
         dest_path = CHAIN_BACKUP_DIR / dest_name
-        _chain_job_progress(_format_backup_progress_message(dest_name, 0), {"path": dest_name})
+        started_ts = time.time()
+        _chain_job_progress(_format_backup_progress_message(dest_name, 0, 0.0), {"path": dest_name, "started": started_ts})
         parent = CHAIN_DATA_DIR.parent
         arcname = CHAIN_DATA_DIR.name
         proc = subprocess.Popen(
@@ -2286,10 +2298,11 @@ def _chain_backup_task(container_name: str):
                         size_bytes = dest_path.stat().st_size if dest_path and dest_path.exists() else 0
                     except Exception:
                         size_bytes = 0
-                    progress_details = {"path": dest_name}
+                    elapsed = time.time() - started_ts
+                    progress_details = {"path": dest_name, "started": started_ts, "elapsed": elapsed}
                     if size_bytes:
                         progress_details["size"] = size_bytes
-                    _chain_job_progress(_format_backup_progress_message(dest_name, size_bytes), progress_details)
+                    _chain_job_progress(_format_backup_progress_message(dest_name, size_bytes, elapsed), progress_details)
                     continue
         finally:
             _chain_job_clear_process()
@@ -2297,9 +2310,10 @@ def _chain_backup_task(container_name: str):
             raise RuntimeError(stderr.strip() or stdout.strip() or "Backup command failed")
         _check_chain_job_cancelled()
         size = dest_path.stat().st_size
+        elapsed = time.time() - started_ts
         details.update({"path": dest_name, "size": size})
         status = "success"
-        message = f"Backup created: {dest_name}"
+        message = f"Backup created: {dest_name} ({_format_bytes(size)}, {elapsed:.1f}s)"
     except ChainJobCancelled as exc:
         message = str(exc) or "Chain backup cancelled"
         status = "cancelled"
