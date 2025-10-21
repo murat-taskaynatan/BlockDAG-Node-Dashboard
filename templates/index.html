@@ -1733,11 +1733,11 @@ async function refreshCharts(){
     const syncRateRaw = Array.isArray(a.sync_rate) ? a.sync_rate
       : Array.isArray(a.height_dx) ? a.height_dx
       : [];
-    const activityRateSeries = alignSeriesLength(activityRateRaw, labels.length);
-    let syncRateSeries = alignSeriesLength(syncRateRaw, labels.length);
+    const activityRateSeries = clampRates(alignSeriesLength(activityRateRaw, labels.length));
+    let syncRateSeries = clampRates(alignSeriesLength(syncRateRaw, labels.length));
     if (!syncRateSeries.some(v => Number.isFinite(v))){
       const heightSeries = Array.isArray(a.height_local) ? a.height_local : [];
-      syncRateSeries = alignSeriesLength(deriveRateSeries(labels, heightSeries), labels.length);
+      syncRateSeries = clampRates(alignSeriesLength(deriveRateSeries(labels, heightSeries), labels.length));
     }
     const ctx = document.getElementById('activityChart')?.getContext('2d');
     if (ctx){
@@ -2004,6 +2004,17 @@ function wireLogsPanel(){
 }
 
 const pollMs = Number(window.POLL_INTERVAL || 2000) || 2000;
+const RATE_CAP = 400;
+const clampRates = series => {
+  if (!Array.isArray(series)) return series;
+  return series.map(value => {
+    const num = Number(value);
+    if (!Number.isFinite(num)) return value;
+    if (num > RATE_CAP) return RATE_CAP;
+    if (num < -RATE_CAP) return -RATE_CAP;
+    return num;
+  });
+};
 (async () => {
   wireNodeControls();
   wireControls();
