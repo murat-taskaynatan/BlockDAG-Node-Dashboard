@@ -32,11 +32,25 @@
 .node-ctrls .btn:disabled{opacity:.5;cursor:default}
 .node-ctrls .sp{opacity:.7;margin:0 .2rem;grid-column:1/-1}
 .node-ctrls label{display:flex;flex-direction:column;gap:4px;font-size:11px;text-transform:uppercase;letter-spacing:.06em}
-.node-ctrls label span{opacity:.7}
+.node-ctrls__actions{display:flex;gap:8px;align-items:center}
+.node-ctrls__actions input{flex:1 1 auto;text-align:center}
+.node-ctrls__actions .btn{flex:0 0 auto;min-width:120px}
+.node-ctrls__actions--auto{gap:6px}
+.node-ctrls__actions--auto input{flex:0 0 80px;text-align:center}
+.node-ctrls__actions--container .btn,
+.node-ctrls__actions--auto .btn{
+  min-width:140px;
+  width:140px !important;
+  flex:0 0 140px !important;
+}
+.auto-hours{display:inline-flex;align-items:center;gap:8px}
+.auto-hours input{width:80px;text-align:center}
+.auto-hours__suffix{font-size:11px;opacity:.75;text-transform:uppercase;letter-spacing:.06em;margin-right:4px}
+.node-ctrls label span{opacity:.7;font-size:11px;text-transform:uppercase;letter-spacing:.06em}
 .node-ctrls input{background:transparent;border:1px solid #3a4a7a;border-radius:.6rem;padding:.35rem .6rem;color:inherit}
 .node-ctrls select{width:100%;appearance:none;background-color:rgba(255,255,255,.06);border:1px solid #3a4a7a;border-radius:.6rem;padding:.35rem .6rem;color:var(--text);background-image:linear-gradient(45deg,transparent 50%,currentColor 50%),linear-gradient(135deg,currentColor 50%,transparent 50%);background-position:calc(100% - 18px) calc(50% - 3px),calc(100% - 12px) calc(50% - 3px);background-size:6px 6px;background-repeat:no-repeat;padding-right:1.8rem}
 .node-ctrls select option{background-color:var(--card);color:var(--text)}
-#nodeControlsCard .node-ctrls--node{display:grid;grid-template-columns:minmax(220px,1.4fr) minmax(200px,1fr) minmax(160px,.9fr) minmax(140px,auto) minmax(200px,.9fr) minmax(160px,.7fr);column-gap:12px;row-gap:4px;align-items:end}
+#nodeControlsCard .node-ctrls--node{display:flex;flex-direction:column;gap:12px}
 #nodeControlsCard .node-ctrls__field{display:flex;flex-direction:column;gap:4px;min-width:0}
 #nodeControlsCard .node-ctrls__field span{opacity:.7}
 #nodeControlsCard .node-ctrls__field select{width:100%}
@@ -44,11 +58,11 @@
 #nodeControlsCard .node-ctrls__actions .btn{flex:1 1 auto;min-width:120px}
 #nodeControlsCard .node-ctrls__actions--chain .btn{min-width:100px}
 #nodeControlsCard .node-ctrls__field--auto input{width:100%;text-align:center}
-#nodeControlsCard .node-ctrls__btn--auto-apply{width:100%;min-width:110px}
-#nodeControlsCard .node-ctrls__btn--auto-disable{min-width:110px}
-#nodeControlsCard .node-ctrls__meta{align-self:center;justify-self:start;text-align:left;margin:0 0 0 6px;font-size:12px;line-height:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-#nodeControlsCard .node-ctrls__meta--status{justify-self:start;text-align:left}
-#nodeControlsCard .node-ctrls__row{grid-column:1/-1;display:grid;gap:6px;align-items:end}
+#nodeControlsCard .node-ctrls__meta{align-self:flex-start;text-align:left;margin:0;font-size:12px;line-height:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#nodeControlsCard .node-ctrls__meta--status{grid-column:1/-1;margin-left:0;margin-top:2px;text-align:left}
+#nodeControlsCard .node-ctrls__row{width:100%;display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap}
+#nodeControlsCard .node-ctrls__row--primary .node-ctrls__actions--container{flex:0 0 auto}
+#nodeControlsCard .node-ctrls__row--primary .node-ctrls__field--auto{flex:1 1 260px;min-width:200px}
 #nodeControlsCard .node-ctrls__row--chain{margin-top:2px;display:flex;gap:12px;align-items:flex-end;flex-wrap:nowrap}
 #nodeControlsCard .node-ctrls__field--chain{display:flex;flex-direction:column;gap:4px;min-width:0;flex:1 1 460px;max-width:460px}
 #nodeControlsCard .node-ctrls__field--chain span{opacity:.7}
@@ -57,7 +71,6 @@
 #nodeControlsCard .node-ctrls__actions--chain .btn{min-width:110px;flex:0 0 auto;white-space:nowrap}
 #nodeControlsCard .node-ctrls__status{display:none}
 @media (max-width:1100px){
-  #nodeControlsCard .node-ctrls--node{grid-template-columns:repeat(auto-fit,minmax(260px,1fr));align-items:stretch}
   #nodeControlsCard .node-ctrls__actions{flex-wrap:wrap}
   #nodeControlsCard .node-ctrls__actions .btn{flex:1 1 120px}
   #nodeControlsCard .node-ctrls__btn--auto-apply,#nodeControlsCard .node-ctrls__btn--auto-disable{width:100%;min-width:0}
@@ -99,7 +112,7 @@
   <div class="header">
     <div style="display:flex;align-items:center;gap:10px">
       <img src="{{ url_for('static', filename='3d.gif') }}" alt="BlockDAG Logo">
-      <h1 style="margin:0;font-size:22px;">BlockDAG Node Dashboard</h1>
+      <h1 style="margin:0;font-size:22px;font-weight:700;">BlockDAG Node Dashboard</h1>
     </div>
     <span id="healthLine" class="pill">Loading…</span>
   </div>
@@ -123,23 +136,31 @@
     <div class="card" id="nodeControlsCard" hidden>
       <div class="title">Node Controls</div>
       <div class="node-ctrls node-ctrls--node">
-        <label class="node-ctrls__field node-ctrls__field--container">
-          <span>Container</span>
-          <select id="nodeContainerSelect" disabled>
-            <option value="">Loading…</option>
-          </select>
-        </label>
-        <div class="node-ctrls__actions node-ctrls__actions--container">
-          <button class="btn" data-node-action="restart" id="btnContainerRestart" disabled>Restart</button>
-        </div>
+        <div class="node-ctrls__row node-ctrls__row--primary">
+          <label class="node-ctrls__field node-ctrls__field--node">
+            <span>Node</span>
+            <select id="nodeSelect" disabled>
+              <option value="">Loading…</option>
+            </select>
+          </label>
+          <div class="node-ctrls__actions node-ctrls__actions--container">
+            <button class="btn" data-node-action="start" id="btnContainerStart" disabled>Start</button>
+            <button class="btn btn--danger" data-node-action="stop" id="btnContainerStop" disabled>Stop</button>
+            <button class="btn" data-node-action="restart" id="btnContainerRestart" disabled>Restart</button>
+          </div>
         <label class="node-ctrls__field node-ctrls__field--auto">
-          <span>Auto restart (hrs)</span>
-          <input type="number" id="autoRestartHours" min="1" step="1" value="6">
+          <span>Auto restart</span>
+          <div class="node-ctrls__actions node-ctrls__actions--auto">
+            <div class="auto-hours">
+              <input type="number" id="autoRestartHours" min="1" step="1" value="6">
+              <span class="auto-hours__suffix">hrs</span>
+              <button class="btn node-ctrls__btn node-ctrls__btn--auto-toggle" data-node-action="auto_toggle" id="btnAutoRestartToggle" disabled>Enable</button>
+            </div>
+          </div>
         </label>
-        <button class="btn node-ctrls__btn node-ctrls__btn--auto-apply" data-node-action="auto_enable" id="btnAutoRestartEnable" disabled>Apply</button>
-        <button class="btn btn--danger node-ctrls__btn node-ctrls__btn--auto-disable" data-node-action="auto_disable" id="btnAutoRestartDisable" disabled>Disable</button>
-        <span class="node-ctrls__meta" id="nodeContainerDetails">Auto restart: —</span>
+        </div>
         <span class="node-ctrls__meta node-ctrls__meta--status" id="nodeControlStatus"></span>
+        <span class="node-ctrls__meta" id="nodeContainerDetails"></span>
         <div class="node-ctrls__row node-ctrls__row--chain">
           <label class="node-ctrls__field node-ctrls__field--chain">
             <span>Chain backups</span>
@@ -302,10 +323,22 @@ const activitySeriesLabels = {
 };
 const baseChartLabels = { peers: 'Peers', latency: 'RPC Latency (ms)' };
 const NODE_CTRL_REFRESH_MS = 10000;
-const nodeControlState = { enabled:false, hostMode:false, containers:[], lastFetched:0, chainBackups:[], chainBackupsLastFetched:0, chainJob:null, chainEnabled:false };
+const nodeControlState = { enabled:false, hostMode:false, containers:[], nodes:[], activeNode:null, lastFetched:0, chainBackups:[], chainBackupsLastFetched:0, chainJob:null, chainEnabled:false, chainEnabledServer:false };
+let knownNodes = [];
+let currentNodeId = (localStorage.getItem('dashboard.nodeId') || '').trim();
 let nodeControlPendingMessage = null;
 let chainControlPendingMessage = null;
 const AUTO_RESTART_DEFAULT_HOURS = 6;
+
+function getActiveNodeMeta(){
+  return knownNodes.find(n => n && n.id === currentNodeId) || null;
+}
+
+function getActiveContainerEntry(){
+  const node = getActiveNodeMeta();
+  if (!node || !node.container) return null;
+  return findContainer(node.container);
+}
 
 function formatBytes(bytes){
   const num = Number(bytes);
@@ -339,6 +372,36 @@ function formatDuration(seconds){
     return `${hrs}:${pad(mins)}:${pad(secs)}`;
   }
   return `${mins}:${pad(secs)}`;
+}
+
+function withNodeParam(url){
+  if (!currentNodeId) return url;
+  const separator = url.includes('?') ? '&' : '?';
+  return `${url}${separator}node=${encodeURIComponent(currentNodeId)}`;
+}
+
+function resetCharts(){
+  Object.entries(charts).forEach(([key, chart]) => {
+    if (chart && typeof chart.destroy === 'function'){
+      try{ chart.destroy(); }catch(_){ }
+    }
+  });
+  charts = {};
+}
+
+function setActiveNode(nodeId, opts = {}){
+  if (!nodeId) return;
+  if (currentNodeId === nodeId) return;
+  currentNodeId = nodeId;
+  try{ localStorage.setItem('dashboard.nodeId', nodeId); }catch(_){ }
+  nodeControlState.activeNode = nodeId;
+  if (opts.skipRefresh) return;
+  resetCharts();
+  refreshStatus();
+  refreshCharts();
+  loadChartConfig();
+  nodeControlState.lastFetched = 0;
+  refreshNodeControls(true);
 }
 
 function formatBackupNameDisplay(name){
@@ -521,8 +584,9 @@ function deriveRateSeries(labels, totals){
   let prevTs = null;
   for (let i = 0; i < len; i++){
     const ts = Number(labels[i]);
-    const total = Number(totals[i]);
-    if (!Number.isFinite(ts) || !Number.isFinite(total)){
+    const rawTotal = totals[i];
+    const total = Number(rawTotal);
+    if (!Number.isFinite(ts) || rawTotal === null || typeof rawTotal === 'undefined' || !Number.isFinite(total)){
       rates[i] = null;
       continue;
     }
@@ -633,14 +697,33 @@ function setNodeControlStatus(msg, ok = true){
   const el = document.getElementById('nodeControlStatus');
   if (!el) return;
   el.textContent = msg || '';
-  el.style.color = ok ? 'var(--muted)' : 'var(--bad)';
-  el.style.opacity = msg ? 1 : 0;
+  if (!msg){
+    el.style.opacity = 0;
+    return;
+  }
+  el.style.opacity = 1;
+  const lowered = (msg || '').toLowerCase();
+  const highlightRestart = lowered.includes('restart');
+  const highlightSetup = lowered.includes('setup complete');
+  const highlightStartStop = lowered.includes('start') || lowered.includes('stop');
+  if (!ok || highlightRestart || highlightSetup || highlightStartStop){
+    el.style.color = 'var(--bad)';
+  } else {
+    el.style.color = 'var(--muted)';
+  }
 }
 
 function setNodeControlButtonsDisabled(disabled){
+  const toggleBtn = document.getElementById('btnAutoRestartToggle');
   document.querySelectorAll('#nodeControlsCard [data-node-action]').forEach(btn => {
+    const action = btn?.dataset?.nodeAction || '';
+    if (btn === toggleBtn || action === 'start' || action === 'stop') return;
     btn.disabled = !!disabled;
   });
+  if (toggleBtn){
+    toggleBtn.disabled = !!disabled;
+    toggleBtn.style.opacity = disabled ? '0.45' : '1';
+  }
   const hoursInput = document.getElementById('autoRestartHours');
   if (hoursInput){
     hoursInput.disabled = !!disabled;
@@ -692,57 +775,188 @@ function describeAutoRestart(entry){
 }
 
 function updateNodeContainerDetails(){
-  const select = document.getElementById('nodeContainerSelect');
   const details = document.getElementById('nodeContainerDetails');
   const hoursInput = document.getElementById('autoRestartHours');
-  const disableBtn = document.getElementById('btnAutoRestartDisable');
+  const toggleBtn = document.getElementById('btnAutoRestartToggle');
+  const startBtn = document.getElementById('btnContainerStart');
+  const stopBtn = document.getElementById('btnContainerStop');
   if (!details) return;
-  const hasSelection = !!(select && select.value);
-  if (disableBtn){
-    disableBtn.classList.add('btn--danger');
-    if (!hasSelection){
-      disableBtn.disabled = true;
-      disableBtn.title = 'Select a container first';
-    }
+  details.textContent = '';
+  if (toggleBtn){
+    toggleBtn.disabled = true;
+    toggleBtn.classList.remove('btn--danger');
+    toggleBtn.title = 'Select a node to manage auto restart';
+    toggleBtn.style.opacity = '0.45';
+    toggleBtn.dataset.state = 'enable';
+    toggleBtn.textContent = 'Enable';
   }
-  if (!hasSelection){
-    details.textContent = 'Auto restart: Disabled';
-    if (hoursInput) hoursInput.value = AUTO_RESTART_DEFAULT_HOURS;
+  if (startBtn){
+    startBtn.disabled = true;
+    startBtn.style.opacity = '0.45';
+    startBtn.title = 'Start container';
+  }
+  if (stopBtn){
+    stopBtn.disabled = true;
+    stopBtn.style.opacity = '0.45';
+    stopBtn.title = 'Stop container';
+    stopBtn.classList.add('btn--danger');
+  }
+  const hostMode = !!nodeControlState.hostMode;
+  const activeNode = getActiveNodeMeta();
+  const containerEntry = getActiveContainerEntry();
+  const containerName = activeNode && activeNode.container ? activeNode.container : '';
+  if (hostMode){
+    if (hoursInput){
+      hoursInput.value = AUTO_RESTART_DEFAULT_HOURS;
+    }
+    if (toggleBtn){
+      toggleBtn.disabled = true;
+      toggleBtn.title = 'Docker controls unavailable on this host';
+      toggleBtn.style.opacity = '0.45';
+    }
+    if (startBtn){
+      startBtn.disabled = true;
+      startBtn.title = 'Docker controls unavailable on this host';
+      startBtn.style.opacity = '0.45';
+    }
+    if (stopBtn){
+      stopBtn.disabled = true;
+      stopBtn.title = 'Docker controls unavailable on this host';
+      stopBtn.style.opacity = '0.45';
+    }
     return;
   }
-  const entry = findContainer(select.value);
-  details.textContent = describeAutoRestart(entry);
+  if (!containerName){
+    if (hoursInput){
+      hoursInput.value = AUTO_RESTART_DEFAULT_HOURS;
+    }
+    if (toggleBtn){
+      toggleBtn.disabled = true;
+      toggleBtn.title = 'No container available';
+      toggleBtn.style.opacity = '0.45';
+    }
+    if (startBtn){
+      startBtn.disabled = true;
+      startBtn.title = 'No container available';
+      startBtn.style.opacity = '0.45';
+    }
+    if (stopBtn){
+      stopBtn.disabled = true;
+      stopBtn.title = 'No container available';
+      stopBtn.style.opacity = '0.45';
+    }
+    return;
+  }
+  if (!containerEntry){
+    if (hoursInput){
+      hoursInput.value = AUTO_RESTART_DEFAULT_HOURS;
+    }
+    if (toggleBtn){
+      toggleBtn.disabled = true;
+      toggleBtn.title = 'Container status unavailable';
+      toggleBtn.style.opacity = '0.45';
+    }
+    if (startBtn){
+      startBtn.disabled = true;
+      startBtn.title = 'Container status unavailable';
+      startBtn.style.opacity = '0.45';
+    }
+    if (stopBtn){
+      stopBtn.disabled = true;
+      stopBtn.title = 'Container status unavailable';
+      stopBtn.style.opacity = '0.45';
+    }
+    return;
+  }
   if (hoursInput){
-    if (entry && entry.auto_restart && Number.isFinite(entry.auto_restart.interval_hours)){
-      const hours = Math.max(1, Math.round(entry.auto_restart.interval_hours));
+    if (containerEntry.auto_restart && Number.isFinite(containerEntry.auto_restart.interval_hours)){
+      const hours = Math.max(1, Math.round(containerEntry.auto_restart.interval_hours));
       hoursInput.value = hours;
     } else {
       hoursInput.value = AUTO_RESTART_DEFAULT_HOURS;
     }
   }
-  if (disableBtn){
-    const auto = entry && entry.auto_restart ? entry.auto_restart : null;
-    const canDisable = !!(auto && auto.installed && (auto.enabled || auto.active));
-    disableBtn.disabled = !canDisable;
-    disableBtn.title = canDisable ? 'Disable auto restart' : 'Auto restart already disabled';
+  if (toggleBtn){
+    const auto = containerEntry.auto_restart || null;
+    const active = !!(auto && auto.installed && (auto.enabled || auto.active));
+    toggleBtn.disabled = false;
+    toggleBtn.style.opacity = '1';
+    if (active){
+      toggleBtn.classList.add('btn--danger');
+      toggleBtn.textContent = 'Disable';
+      toggleBtn.dataset.state = 'disable';
+      toggleBtn.title = 'Disable auto restart';
+    } else {
+      toggleBtn.classList.remove('btn--danger');
+      toggleBtn.textContent = 'Enable';
+      toggleBtn.dataset.state = 'enable';
+      toggleBtn.title = 'Enable auto restart';
+    }
+  }
+  const statusText = String(containerEntry.status || '').toLowerCase();
+  const isRunning = statusText.includes('up');
+  if (startBtn){
+    startBtn.disabled = isRunning;
+    startBtn.style.opacity = isRunning ? '0.45' : '1';
+    startBtn.title = isRunning ? 'Container already running' : 'Start container';
+  }
+  if (stopBtn){
+    stopBtn.disabled = !isRunning;
+    stopBtn.style.opacity = stopBtn.disabled ? '0.45' : '1';
+    stopBtn.title = stopBtn.disabled ? 'Container already stopped' : 'Stop container';
   }
 }
 
 function renderNodeControls(errorMsg){
   const card = document.getElementById('nodeControlsCard');
-  const select = document.getElementById('nodeContainerSelect');
+  const nodeSelect = document.getElementById('nodeSelect');
   const details = document.getElementById('nodeContainerDetails');
+  const toggleBtn = document.getElementById('btnAutoRestartToggle');
   const hostMode = !!nodeControlState.hostMode;
   if (!card) return;
   card.hidden = false;
-  if (errorMsg){
-    if (select){
-      select.innerHTML = '<option value=\"\">Unavailable</option>';
-      select.disabled = true;
-      select.value = '';
+  if (nodeSelect){
+    nodeSelect.innerHTML = '';
+    if (!knownNodes.length){
+      const opt = document.createElement('option');
+      opt.value = '';
+      opt.textContent = 'No nodes available';
+      nodeSelect.appendChild(opt);
+      nodeSelect.disabled = true;
+    } else {
+      knownNodes.forEach(node => {
+        if (!node || !node.id) return;
+        const opt = document.createElement('option');
+        opt.value = node.id;
+        const containerLabel = (node.container || '').trim();
+        const fallbackLabel = node.label || node.id;
+        opt.textContent = containerLabel || fallbackLabel;
+        if (containerLabel && fallbackLabel && containerLabel !== fallbackLabel){
+          opt.title = `${fallbackLabel} • ${containerLabel}`;
+        } else {
+          opt.title = fallbackLabel;
+        }
+        if (node.id === currentNodeId){
+          opt.selected = true;
+        }
+        nodeSelect.appendChild(opt);
+      });
+      nodeSelect.disabled = false;
+      if (!currentNodeId && knownNodes[0] && knownNodes[0].id){
+        nodeSelect.value = knownNodes[0].id;
+      }
     }
-    if (details) details.textContent = 'Auto restart: unavailable';
+  }
+  updateNodeContainerDetails();
+  const serverAllowsChain = !!nodeControlState.chainEnabledServer || hostMode;
+  if (errorMsg){
     setNodeControlButtonsDisabled(true);
+    if (toggleBtn){
+      toggleBtn.disabled = true;
+      toggleBtn.style.opacity = '0.45';
+      toggleBtn.textContent = 'Enable';
+      toggleBtn.dataset.state = 'enable';
+    }
     if (!nodeControlPendingMessage){
       setNodeControlStatus(errorMsg, false);
     }
@@ -751,69 +965,53 @@ function renderNodeControls(errorMsg){
     return;
   }
   if (!nodeControlState.enabled && !hostMode){
-    if (select){
-      select.innerHTML = '<option value=\"\">Controls disabled</option>';
-      select.disabled = true;
-      select.value = '';
-    }
-    if (details) details.textContent = 'Auto restart: unavailable';
     setNodeControlButtonsDisabled(true);
+    if (toggleBtn){
+      toggleBtn.disabled = true;
+      toggleBtn.style.opacity = '0.45';
+      toggleBtn.textContent = 'Enable';
+      toggleBtn.dataset.state = 'enable';
+    }
     nodeControlState.chainEnabled = false;
     renderChainControls();
+    if (!nodeControlPendingMessage){
+      setNodeControlStatus('Docker controls unavailable', false);
+    }
     return;
   }
   if (hostMode){
-    if (select){
-      select.innerHTML = '<option value=\"\">Local host (no containers)</option>';
-      select.disabled = true;
-      select.value = '';
-    }
-    if (details) details.textContent = 'Docker controls unavailable on this host.';
     setNodeControlButtonsDisabled(true);
-    nodeControlState.chainEnabled = true;
+    if (toggleBtn){
+      toggleBtn.disabled = true;
+      toggleBtn.style.opacity = '0.45';
+      toggleBtn.textContent = 'Enable';
+      toggleBtn.dataset.state = 'enable';
+    }
+    nodeControlState.chainEnabled = serverAllowsChain;
     renderChainControls();
     if (!nodeControlPendingMessage){
       setNodeControlStatus('Docker controls unavailable on this host. Chain backups are still available.', true);
     }
     return;
   }
-  const containers = Array.isArray(nodeControlState.containers) ? nodeControlState.containers : [];
-  if (select){
-    const previous = select.value;
-    select.innerHTML = '';
-    if (!containers.length){
-      const opt = document.createElement('option');
-      opt.value = '';
-      opt.textContent = '(no containers)';
-      select.appendChild(opt);
-      select.disabled = true;
-      select.value = '';
-    } else {
-      containers.forEach((item, index) => {
-        if (!item || !item.name) return;
-        const opt = document.createElement('option');
-        opt.value = item.name;
-        opt.textContent = item.name;
-        if (previous === item.name || (!previous && index === 0)){
-          opt.selected = true;
-        }
-        select.appendChild(opt);
-      });
-      select.disabled = false;
-      if (!select.value && containers.length){
-        select.value = containers[0].name;
-      }
-    }
-  }
-  const hasContainer = !!(select && select.value);
-  setNodeControlButtonsDisabled(!hasContainer);
-  updateNodeContainerDetails();
-  nodeControlState.chainEnabled = hasContainer;
+  const activeNode = getActiveNodeMeta();
+  const containerEntry = getActiveContainerEntry();
+  const containerName = activeNode && activeNode.container ? activeNode.container : '';
+  const hasContainer = !!containerName;
+  const containerAvailable = !!containerEntry;
+  const canControl = hasContainer && containerAvailable;
+  setNodeControlButtonsDisabled(!canControl);
+  const chainEnabled = serverAllowsChain && canControl;
+  nodeControlState.chainEnabled = chainEnabled;
   renderChainControls();
-  if (!hasContainer){
-    setNodeControlStatus('No containers detected', false);
-  } else if (!nodeControlPendingMessage){
-    setNodeControlStatus('');
+  if (!nodeControlPendingMessage){
+    if (!hasContainer){
+      setNodeControlStatus('Selected node does not specify a container.', false);
+    } else if (!containerAvailable){
+      setNodeControlStatus(`Container ${containerName} not found.`, false);
+    } else {
+      setNodeControlStatus('');
+    }
   }
 }
 
@@ -930,7 +1128,7 @@ function renderChainControls(){
     if (job && (jobMessage || job.message)){
       setChainControlStatus(jobMessage || job.message, job.status !== 'error');
     } else if (!enabled){
-      setChainControlStatus('Select a container to manage chain backups.', false);
+      setChainControlStatus('Select a node with chain backups available.', false);
     } else {
       setChainControlStatus(hasBackups ? 'Ready.' : 'No backups found.', hasBackups);
     }
@@ -943,7 +1141,7 @@ async function refreshNodeControls(force = false){
     return;
   }
   try{
-    const res = await fetch('/api/containers', { cache:'no-store' });
+    const res = await fetch(withNodeParam('/api/containers'), { cache:'no-store' });
     if (!res.ok){
       throw new Error(`HTTP ${res.status}`);
     }
@@ -954,16 +1152,32 @@ async function refreshNodeControls(force = false){
     const chainEnabledFromServer = (data && Object.prototype.hasOwnProperty.call(data, 'chain_enabled'))
       ? !!data.chain_enabled
       : (dockerEnabled || hostMode);
+    knownNodes = Array.isArray(data?.nodes) ? data.nodes : [];
+    nodeControlState.nodes = knownNodes.slice();
+    const activeFromServer = data?.active_node || null;
+    const availableIds = knownNodes.map(n => n && n.id).filter(Boolean);
+    if (!currentNodeId || !availableIds.includes(currentNodeId)){
+      const fallbackId = availableIds.includes(activeFromServer) ? activeFromServer : (availableIds[0] || '');
+      if (fallbackId){
+        setActiveNode(fallbackId, { skipRefresh: true });
+      } else {
+        currentNodeId = '';
+      }
+    } else {
+      nodeControlState.activeNode = currentNodeId;
+    }
     nodeControlState.enabled = dockerEnabled;
     nodeControlState.hostMode = hostMode;
     nodeControlState.containers = containers;
-    nodeControlState.chainEnabled = hostMode ? true : chainEnabledFromServer;
+    nodeControlState.chainEnabledServer = !!chainEnabledFromServer;
+    nodeControlState.chainEnabled = hostMode ? true : !!chainEnabledFromServer;
     nodeControlState.lastFetched = Date.now();
     renderNodeControls();
   }catch(err){
     nodeControlState.enabled = false;
     nodeControlState.hostMode = false;
     nodeControlState.chainEnabled = false;
+    nodeControlState.chainEnabledServer = false;
     nodeControlState.lastFetched = Date.now();
     console.warn('[node-controls] failed to load containers', err);
     renderNodeControls('Node controls unavailable');
@@ -977,7 +1191,7 @@ async function refreshChainBackups(force = false){
     return;
   }
   try{
-    const res = await fetch('/api/chain/backups', { cache:'no-store' });
+    const res = await fetch(withNodeParam('/api/chain/backups'), { cache:'no-store' });
     if (!res.ok){
       throw new Error(`HTTP ${res.status}`);
     }
@@ -1001,33 +1215,36 @@ async function performNodeAction(action){
     stop:'docker_stop',
     auto_enable:'auto_restart_enable',
     auto_disable:'auto_restart_disable',
+    auto_toggle:null,
     chain_backup:'chain_backup',
     chain_restore:'chain_restore',
     chain_delete:'chain_delete',
     chain_cancel:'chain_cancel',
   };
-  const select = document.getElementById('nodeContainerSelect');
   const isChainAction = action.startsWith('chain_');
   const hostMode = !!nodeControlState.hostMode;
   const statusSetter = isChainAction ? setChainControlStatus : setNodeControlStatus;
-  if (!ACTION_MAP[action]){
+  const toggleBtn = document.getElementById('btnAutoRestartToggle');
+  if (!(action in ACTION_MAP)){
     statusSetter('Unsupported action', false);
     return;
   }
-  let container = (select && select.value) ? select.value : '';
+  const activeNode = getActiveNodeMeta();
+  const containerEntry = getActiveContainerEntry();
+  let container = activeNode && activeNode.container ? activeNode.container : '';
   if (action === 'chain_cancel' && !container){
     const job = nodeControlState.chainJob || null;
     if (job && job.details && job.details.container){
       container = job.details.container;
     }
   }
-  if (!container){
-    if (isChainAction && hostMode){
-      container = '';
-    } else {
-      statusSetter('Select a container first', false);
-      return;
-    }
+  if (!container && !hostMode){
+    statusSetter('Select a node with a container first', false);
+    return;
+  }
+  if (!containerEntry && !hostMode && container && action !== 'chain_cancel'){
+    statusSetter(`Container ${container} not available`, false);
+    return;
   }
   const hoursInput = document.getElementById('autoRestartHours');
   const backupSelect = document.getElementById('chainBackupSelect');
@@ -1036,10 +1253,20 @@ async function performNodeAction(action){
     start: 'Starting',
     stop: 'Stopping',
   };
+  if (action === 'auto_toggle'){
+    const desired = (toggleBtn && toggleBtn.dataset.state === 'disable') ? 'auto_disable' : 'auto_enable';
+    action = desired;
+  }
+  const resolvedBackendAction = ACTION_MAP[action];
+  if (!resolvedBackendAction){
+    statusSetter('Unsupported action', false);
+    return;
+  }
   let baseLabel = actionLabels[action] || (action.charAt(0).toUpperCase() + action.slice(1));
   let statusMessage = container ? `${baseLabel} ${container}` : baseLabel;
   let successLabel = action.charAt(0).toUpperCase() + action.slice(1);
-  const payload = { action: ACTION_MAP[action], container };
+  const payload = { action: resolvedBackendAction, container };
+  if (currentNodeId){ payload.node = currentNodeId; }
   if (action === 'auto_enable'){
     const hoursVal = Number(hoursInput ? hoursInput.value : AUTO_RESTART_DEFAULT_HOURS);
     if (!Number.isFinite(hoursVal) || hoursVal <= 0){
@@ -1091,7 +1318,7 @@ async function performNodeAction(action){
       setChainControlButtonsDisabled(true);
     }
     statusSetter(`${statusMessage}…`);
-    const res = await fetch('/api/control', {
+    const res = await fetch(withNodeParam('/api/control'), {
       method:'POST',
       headers:{'content-type':'application/json'},
       body: JSON.stringify(payload)
@@ -1114,26 +1341,26 @@ async function performNodeAction(action){
     finalOk = false;
   }finally{
     if (isChainAction){
-  chainControlPendingMessage = { text: finalMessage, ok: finalOk };
-} else {
-  nodeControlPendingMessage = { text: finalMessage, ok: finalOk };
-}
-nodeControlState.lastFetched = 0;
+      chainControlPendingMessage = { text: finalMessage, ok: finalOk };
+    } else {
+      nodeControlPendingMessage = { text: finalMessage, ok: finalOk };
+    }
+    nodeControlState.lastFetched = 0;
     try{
       await refreshNodeControls(true);
     }catch(refreshErr){
       console.warn('[node-controls] refresh after action failed', refreshErr);
       renderNodeControls('Node controls unavailable');
     }
-if (isChainAction){
-  if (chainControlPendingMessage){
-    setChainControlStatus(chainControlPendingMessage.text, chainControlPendingMessage.ok);
-    chainControlPendingMessage = null;
-  }
-  if (action === 'chain_restore'){
-    try{ await refreshChainBackups(true); }catch(_){/* ignore */}
-  }
-} else if (nodeControlPendingMessage){
+    if (isChainAction){
+      if (chainControlPendingMessage){
+        setChainControlStatus(chainControlPendingMessage.text, chainControlPendingMessage.ok);
+        chainControlPendingMessage = null;
+      }
+      if (action === 'chain_restore'){
+        try{ await refreshChainBackups(true); }catch(_){/* ignore */}
+      }
+    } else if (nodeControlPendingMessage){
       setNodeControlStatus(nodeControlPendingMessage.text, nodeControlPendingMessage.ok);
       nodeControlPendingMessage = null;
     }
@@ -1143,11 +1370,13 @@ if (isChainAction){
 function wireNodeControls(){
   const card = document.getElementById('nodeControlsCard');
   if (!card) return;
-  const select = document.getElementById('nodeContainerSelect');
-  if (select){
-    select.addEventListener('change', () => {
-      updateNodeContainerDetails();
-      setNodeControlStatus('');
+  const nodeSelect = document.getElementById('nodeSelect');
+  if (nodeSelect){
+    nodeSelect.addEventListener('change', () => {
+      const nodeId = nodeSelect.value || '';
+      if (nodeId){
+        setActiveNode(nodeId);
+      }
     });
   }
   document.querySelectorAll('#nodeControlsCard [data-node-action]').forEach(btn => {
@@ -1298,14 +1527,67 @@ const LOG_LINES_LIMIT = 60;
 
 async function refreshStatus(){
   try{
-    const r = await fetch('/api/status', {cache:'no-store'});
+    const r = await fetch(withNodeParam('/api/status'), {cache:'no-store'});
     const j = await r.json();
     const pill = document.getElementById('healthLine');
     if (pill){
       const ns = j.node_state || {};
-      const base = ns.label || (j.status || j.health || 'Unknown');
-      const detailText = ns.detail || ((j.health_text && j.health_text !== 'ok') ? j.health_text : '');
-      pill.textContent = detailText ? `${base} · ${detailText}` : base;
+      const code = (ns.code || '').toString().trim().toLowerCase();
+      const labelRaw = (ns.label || '').toString().trim();
+      const map = {
+        offline: 'Offline',
+        initializing: 'Initializing',
+        no_peers: 'No Peers',
+        stalled: 'Stalled',
+        mining: 'Mining',
+        syncing: 'Syncing',
+        downloading: 'Downloading Blocks',
+        steady: 'Healthy',
+        healthy: 'Healthy',
+      };
+      const capitalize = value => value.replace(/[_-]+/g, ' ').replace(/(^|\s)\w/g, c => c.toUpperCase());
+      const derivedStatus = (() => {
+        if (labelRaw && labelRaw.toLowerCase() !== 'unknown'){
+          return labelRaw;
+        }
+        if (code && code !== 'unknown'){
+          return map[code] || capitalize(code);
+        }
+        if (!j.ok) return 'Offline';
+        const peers = Number(j.peers || 0);
+        const height = Number(j.height_local ?? j.height ?? 0);
+        const heightRate = Number(ns.height_rate_5m || ns.height_rate || 0);
+        const activityRate = Number(ns.activity?.total || 0);
+        const stalledSec = Number(ns.since_height_change_sec || 0);
+        if (height <= 0) return 'Initializing';
+        if (peers <= 0) return 'No Peers';
+        if (heightRate <= 0 && stalledSec > 90) return 'Stalled';
+        if (activityRate > 0.1) return 'Downloading Blocks';
+        if (heightRate >= 0.3) return 'Syncing';
+        return 'Healthy';
+      })();
+      const detailText = (() => {
+        const detail = (ns.detail || '').toString().trim();
+        if (detail) return detail;
+        const healthText = (j.health_text || '').toString().trim();
+        if (healthText && healthText.toLowerCase() !== derivedStatus.toLowerCase()){
+          return healthText;
+        }
+        if (code === 'syncing'){
+          const hRate = Number(ns.height_rate || ns.height_rate_5m || 0);
+          if (Number.isFinite(hRate) && hRate > 0){
+            return `${hRate.toFixed(2)} blk/s`;
+          }
+        }
+        if (code === 'mining'){
+          const minedPerMin = Number(ns.activity?.mined || 0) * 60;
+          if (Number.isFinite(minedPerMin) && minedPerMin > 0){
+            return `${minedPerMin.toFixed(2)} blk/min`;
+          }
+        }
+        return '';
+      })();
+      pill.textContent = detailText ? `${derivedStatus} · ${detailText}` : derivedStatus;
       pill.title = pill.textContent;
       const color = ns.color || (j.ok ? '#25d366' : '#ff5370');
       applyPillStyle(pill, color, 0.2);
@@ -1398,7 +1680,8 @@ async function refreshLogs(){
   const panel = document.getElementById('logsPanel');
   if (panel && !panel.open) return;
   try{
-    const res = await fetch(`/api/logs/recent?limit=${LOG_LINES_LIMIT}`, { cache:'no-store' });
+    const logsUrl = withNodeParam(`/api/logs/recent?limit=${LOG_LINES_LIMIT}`);
+    const res = await fetch(logsUrl, { cache:'no-store' });
     if (!res.ok) throw new Error(res.status || 'logs fetch failed');
     const data = await res.json();
     const lines = Array.isArray(data.lines) ? data.lines : [];
@@ -1422,7 +1705,7 @@ async function refreshLogs(){
 
 async function refreshCharts(){
   if (!window.Chart) return;
-  const fetchJSON = u => fetch(u).then(r=>r.json()).catch(()=>null);
+  const fetchJSON = path => fetch(withNodeParam(path)).then(r => r.json()).catch(() => null);
   const [h,p,l,a] = await Promise.all([
     fetchJSON('/api/chart/height'),
     fetchJSON('/api/chart/peers'),
@@ -1459,7 +1742,7 @@ async function refreshCharts(){
     const ctx = document.getElementById('activityChart')?.getContext('2d');
     if (ctx){
       if (charts.activity && charts.activity.data.datasets.length !== 2){
-        try{ charts.activity.destroy(); }catch(_){}
+        try{ charts.activity.destroy(); }catch(_){ }
         charts.activity = null;
       }
       if (!charts.activity){
@@ -1507,7 +1790,6 @@ async function refreshCharts(){
     renderActivityValue([], []);
   }
 }
-
 async function tick(){
   await refreshStatus();
   await refreshCharts();
@@ -1516,7 +1798,7 @@ async function tick(){
 async function preloadHistory(){
   if (!window.Chart) return;
   try{
-    const res = await fetch('/api/history', { cache:'no-store' });
+    const res = await fetch(withNodeParam('/api/history'), { cache:'no-store' });
     if (!res.ok) throw new Error(res.status || 'history response not ok');
     const hist = await res.json();
     const labelsFor = key => (hist[key]?.labels) || [];
@@ -1562,7 +1844,7 @@ async function preloadHistory(){
       const ctx = document.getElementById('activityChart')?.getContext('2d');
       if (ctx){
         if (charts.activity && charts.activity.data.datasets.length !== 2){
-          try{ charts.activity.destroy(); }catch(_){}
+          try{ charts.activity.destroy(); }catch(_){ }
           charts.activity = null;
         }
         if (!charts.activity){
@@ -1597,7 +1879,6 @@ async function preloadHistory(){
     console.warn('[history] preload failed:', err);
   }
 }
-
 function setCtlStatus(msg, ok=true){
   const el = document.getElementById('ctlStatus');
   if (!el) return;
@@ -1626,8 +1907,8 @@ function syncSelectValue(select, value, labelFmt){
 async function loadChartConfig(){
   try{
     const [cfgRes, statusRes] = await Promise.all([
-      fetch('/api/chart/config', { cache:'no-store' }),
-      fetch('/api/status', { cache:'no-store' })
+      fetch(withNodeParam('/api/chart/config'), { cache:'no-store' }),
+      fetch(withNodeParam('/api/status'), { cache:'no-store' })
     ]);
     if (!cfgRes.ok) throw new Error('config ' + cfgRes.status);
     if (!statusRes.ok) throw new Error('status ' + statusRes.status);
@@ -1654,10 +1935,10 @@ async function applyWindow(minutes){
     return null;
   }
   const minutesInt = Math.round(value);
-  const res = await fetch('/api/control', {
+  const res = await fetch(withNodeParam('/api/control'), {
     method:'POST',
     headers:{'content-type':'application/json'},
-    body: JSON.stringify({ action:'set_window', minutes: minutesInt })
+    body: JSON.stringify({ action:'set_window', minutes: minutesInt, node: currentNodeId })
   });
   const data = await res.json();
   if (!res.ok || !data.ok) throw new Error(data.error || 'set_window failed');
@@ -1672,10 +1953,10 @@ async function applyHistory(points){
     return null;
   }
   const pointsInt = Math.round(value);
-  const res = await fetch('/api/chart/config', {
+  const res = await fetch(withNodeParam('/api/chart/config'), {
     method:'POST',
     headers:{'content-type':'application/json'},
-    body: JSON.stringify({ history_len: pointsInt })
+    body: JSON.stringify({ history_len: pointsInt, node: currentNodeId })
   });
   const data = await res.json();
   if (!res.ok || !data.ok) throw new Error(data.error || 'set history failed');

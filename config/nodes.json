@@ -1,0 +1,18 @@
+[
+  {
+    "id": "primary",
+    "label": "Primary Node",
+    "container": "blockdag-testnet-network",
+    "rpc_base": "http://127.0.0.1:18545",
+    "chain_data_dir": "/home/blockdag/blockdag-scripts/bin/bdag/data",
+    "chain_backup_dir": "/home/blockdag/backups"
+  },
+  {
+    "id": "node2",
+    "label": "Secondary Node",
+    "container": "blockdag-testnet-network-2",
+    "rpc_base": "http://127.0.0.1:18555",
+    "chain_data_dir": "/home/blockdag/blockdag-scripts/bin/bdag-node2/data",
+    "chain_backup_dir": "/home/blockdag/backups"
+  }
+]

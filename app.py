@@ -1,11 +1,15 @@
-import os, time, json, threading, shutil, subprocess, math
+import os, time, json, threading, shutil, subprocess, math, logging
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from collections import deque
-from flask import Flask, jsonify, render_template, request
+from collections import deque, OrderedDict
+from flask import Flask, jsonify, render_template, request, abort
 
 APP_START = time.time()
 app = Flask(__name__, template_folder="templates", static_folder="static")
+_log_level_name = (os.getenv("BDAG_LOG_LEVEL", "INFO") or "INFO").strip().upper()
+_log_level = getattr(logging, _log_level_name, logging.INFO)
+app.logger.setLevel(_log_level)
 # === Dashboard control globals ===
 __DASHBOARD_CTRL_GLOBALS__=True
 SAMPLER_PAUSED=False
@@ -29,6 +33,7 @@ SYSTEMD_UNIT_DIR = "/etc/systemd/system"
 SYSTEMCTL_BIN = shutil.which("systemctl") or ("/usr/bin/systemctl" if os.path.exists("/usr/bin/systemctl") else None)
 SAMPLE_SEC = int(os.getenv("BDAG_SAMPLE_SEC", "5"))
 WINDOW = int(os.getenv("BDAG_WINDOW", "240"))  # points kept in memory
+HISTORY_POINTS = int(os.getenv("BDAG_HISTORY_POINTS", "720"))
 ENABLE_CONTROL = os.getenv("DASH_ENABLE_CONTROL", "1") == "1"
 ALLOW_DOCKER = os.getenv("DASH_ALLOW_DOCKER", "1") == "1" and shutil.which("docker")
 STALL_THRESHOLD_MS = int(os.getenv("DASH_STALL_THRESHOLD_MS", "180000"))
@@ -36,6 +41,9 @@ SYNC_RATE_THRESHOLD = float(os.getenv("DASH_SYNC_RATE_THRESHOLD", "0.3"))
 DOWNLOAD_RATE_THRESHOLD = float(os.getenv("DASH_DOWNLOAD_RATE_THRESHOLD", "1.0"))
 MINING_RATE_THRESHOLD = float(os.getenv("DASH_MINING_RATE_THRESHOLD", "0.1"))
 APP_VERSION = os.getenv("BDAG_DASH_VERSION", "v1.3.5").strip() or "v1.3.5"
+HEIGHT_JUMP_THRESHOLD = int(os.getenv("DASH_HEIGHT_JUMP_THRESHOLD", "500"))
+ACTIVITY_JUMP_THRESHOLD = float(os.getenv("DASH_ACTIVITY_JUMP_THRESHOLD", "500"))
+ACTIVITY_RATE_MAX = float(os.getenv("DASH_ACTIVITY_RATE_MAX", "200"))
 
 CHAIN_DATA_DIR = Path(os.getenv("BDAG_CHAIN_DATA_DIR", "/home/blockdag/blockdag-scripts/bin/bdag/data")).expanduser().resolve()
 CHAIN_BACKUP_DIR = Path(os.getenv("BDAG_CHAIN_BACKUP_DIR", os.path.expanduser("~/backups"))).expanduser().resolve()
@@ -61,6 +69,376 @@ _chain_job_cancel_event = threading.Event()
 _chain_job_context = {"thread": None, "process": None}
 
 
+def _coerce_bool(value, default=False):
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return bool(default)
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in ("1", "true", "yes", "on"):  # noqa: SIM103
+            return True
+        if lowered in ("0", "false", "no", "off"):
+            return False
+    return bool(default)
+
+
+DEFAULT_NODE_SETTINGS = {
+    "id": (os.getenv("BDAG_DEFAULT_NODE_ID", "default") or "default").strip() or "default",
+    "label": os.getenv("BDAG_DEFAULT_NODE_LABEL", "BlockDAG Node").strip() or "BlockDAG Node",
+    "container": MINING_STATE_SYNC_CONTAINER,
+    "rpc_base": RPC_BASE,
+    "rpc_user": RPC_USER,
+    "rpc_pass": RPC_PASS,
+    "remote_rpc_base": REMOTE_RPC_BASE,
+    "remote_rpc_method": REMOTE_RPC_METHOD,
+    "remote_rpc_timeout": REMOTE_RPC_TIMEOUT,
+    "remote_rpc_cache_sec": REMOTE_RPC_CACHE_SEC,
+    "remote_rpc_verify": REMOTE_RPC_VERIFY,
+    "chain_data_dir": str(CHAIN_DATA_DIR),
+    "chain_backup_dir": str(CHAIN_BACKUP_DIR),
+    "chain_backup_prefix": CHAIN_BACKUP_PREFIX,
+    "chain_backup_suffix": CHAIN_BACKUP_SUFFIX,
+    "chain_backup_max": CHAIN_BACKUP_MAX,
+}
+
+SHARED_CHAIN_BACKUP_DIR = Path(DEFAULT_NODE_SETTINGS["chain_backup_dir"]).expanduser().resolve()
+
+NODE_CONFIG_PATH = Path(os.getenv("BDAG_NODE_CONFIG_PATH", "") or (Path(__file__).resolve().parent / "config" / "nodes.json"))
+
+_context_swap_lock = threading.RLock()
+
+
+class NodeContext:
+    """Holds per-node configuration and runtime state."""
+
+    def __init__(self, config: dict):
+        merged = dict(DEFAULT_NODE_SETTINGS)
+        if config:
+            merged.update({k: v for k, v in config.items() if v is not None})
+        self.id = str(merged.get("id") or "node").strip() or "node"
+        self.label = str(merged.get("label") or self.id).strip() or self.id
+        self.container = str(merged.get("container") or "").strip()
+        self.rpc_base = merged.get("rpc_base") or DEFAULT_NODE_SETTINGS["rpc_base"]
+        self.rpc_user = merged.get("rpc_user") or ""
+        self.rpc_pass = merged.get("rpc_pass") or ""
+        self.remote_rpc_base = merged.get("remote_rpc_base") or DEFAULT_NODE_SETTINGS["remote_rpc_base"]
+        self.remote_rpc_method = merged.get("remote_rpc_method") or DEFAULT_NODE_SETTINGS["remote_rpc_method"]
+        self.remote_rpc_timeout = float(merged.get("remote_rpc_timeout", DEFAULT_NODE_SETTINGS["remote_rpc_timeout"]))
+        self.remote_rpc_cache_sec = float(merged.get("remote_rpc_cache_sec", DEFAULT_NODE_SETTINGS["remote_rpc_cache_sec"]))
+        self.remote_rpc_verify = _coerce_bool(merged.get("remote_rpc_verify", DEFAULT_NODE_SETTINGS["remote_rpc_verify"]))
+        self.chain_data_dir = Path(merged.get("chain_data_dir") or DEFAULT_NODE_SETTINGS["chain_data_dir"]).expanduser().resolve()
+        requested_backup_dir = merged.get("chain_backup_dir")
+        self.chain_backup_dir = SHARED_CHAIN_BACKUP_DIR
+        if requested_backup_dir:
+            try:
+                requested_path = Path(requested_backup_dir).expanduser().resolve()
+            except Exception:
+                requested_path = None
+            if requested_path and requested_path != SHARED_CHAIN_BACKUP_DIR:
+                try:
+                    app.logger.info(
+                        "Ignoring custom chain backup dir %s for node %s; using shared %s",
+                        requested_path,
+                        self.id,
+                        SHARED_CHAIN_BACKUP_DIR,
+                    )
+                except Exception:
+                    pass
+        self.chain_backup_prefix = (merged.get("chain_backup_prefix") or DEFAULT_NODE_SETTINGS["chain_backup_prefix"]).strip() or DEFAULT_NODE_SETTINGS["chain_backup_prefix"]
+        self.chain_backup_suffix = (merged.get("chain_backup_suffix") or DEFAULT_NODE_SETTINGS["chain_backup_suffix"]).strip() or DEFAULT_NODE_SETTINGS["chain_backup_suffix"]
+        self.chain_backup_max = int(merged.get("chain_backup_max", DEFAULT_NODE_SETTINGS["chain_backup_max"]))
+
+        self.lock = threading.Lock()
+        self.history_lock = threading.Lock()
+
+        self.height_series = deque(maxlen=WINDOW)
+        self.remote_height_series = deque(maxlen=WINDOW)
+        self.peers_series = deque(maxlen=WINDOW)
+        self.lat_series = deque(maxlen=WINDOW)
+
+        self.activity_labels = deque(maxlen=WINDOW)
+        self.activity_mined = deque(maxlen=WINDOW)
+        self.activity_processed = deque(maxlen=WINDOW)
+        self.activity_sealed = deque(maxlen=WINDOW)
+
+        self.activity_totals = {
+            "mined": 0.0,
+            "processed": 0.0,
+            "sealed": 0.0,
+        }
+        self.activity_totals_last_ts = None
+
+        self.node_state_cache = {
+            "last_height": None,
+            "last_ts": None,
+            "last_progress_ts": None,
+        }
+        self.node_state_data = None
+
+        self.node_uptime_cache = {"start_ts": None, "checked": 0.0}
+        self.remote_height_cache = {"ts": 0.0, "height": None, "error": None}
+        self.mining_state_sync_cache = {"ts": 0.0, "value": None, "error": None}
+
+        def _history_deque():
+            return deque(maxlen=HISTORY_POINTS)
+
+        self.history_series = {
+            "height_local": _history_deque(),
+            "height_remote": _history_deque(),
+            "peers": _history_deque(),
+            "latency": _history_deque(),
+            "mined": _history_deque(),
+            "processed": _history_deque(),
+            "sealed": _history_deque(),
+            "activity": _history_deque(),
+            "height_dx": _history_deque(),
+        }
+        self.history_state = {"last_ts": None, "last_height": None}
+
+        self.chain_job_lock = threading.Lock()
+        self.chain_job_state = {
+            "active": False,
+            "type": None,
+            "status": "idle",
+            "message": "",
+            "started": None,
+            "ended": None,
+            "details": None,
+        }
+        self.chain_job_context = {"thread": None, "process": None}
+        self.chain_job_cancel_event = threading.Event()
+
+        self.last_sample_meta = None
+        self.chart_sampler_started = False
+        self.last_good_height = 0
+        self.last_good_remote_height = 0
+        self.last_activity_totals = {
+            "mined": 0.0,
+            "processed": 0.0,
+            "sealed": 0.0,
+        }
+        self.last_good_remote_height = 0
+        self.height_zero_streak = 0
+        self.peers_zero_streak = 0
+
+    def as_metadata(self):
+        return {
+            "id": self.id,
+            "label": self.label,
+            "container": self.container,
+            "rpc_base": self.rpc_base,
+            "chain_data_dir": str(self.chain_data_dir),
+            "chain_backup_dir": str(self.chain_backup_dir),
+        }
+
+
+def _load_node_configs():
+    nodes = OrderedDict()
+    raw = []
+    if NODE_CONFIG_PATH.exists():
+        try:
+            content = NODE_CONFIG_PATH.read_text()
+            if content.strip():
+                parsed = json.loads(content)
+                if isinstance(parsed, dict) and "nodes" in parsed:
+                    parsed = parsed.get("nodes")
+                if isinstance(parsed, list):
+                    raw = parsed
+        except Exception as exc:
+            print(f"[dash] Failed to parse node config {NODE_CONFIG_PATH}: {exc}")
+    if not raw:
+        raw = [dict(DEFAULT_NODE_SETTINGS)]
+    for entry in raw:
+        if not isinstance(entry, dict):
+            continue
+        try:
+            ctx = NodeContext(entry)
+        except Exception as exc:
+            print(f"[dash] Skipping invalid node config: {exc}")
+            continue
+        if ctx.id in nodes:
+            print(f"[dash] Duplicate node id '{ctx.id}' ignored")
+            continue
+        nodes[ctx.id] = ctx
+    return nodes
+
+
+NODES = _load_node_configs()
+if not NODES:
+    raise RuntimeError("No node configurations available")
+
+_default_id = (os.getenv("BDAG_DEFAULT_NODE_ID", "") or "").strip()
+if _default_id in NODES:
+    DEFAULT_NODE_ID = _default_id
+else:
+    DEFAULT_NODE_ID = next(iter(NODES))
+DEFAULT_NODE = NODES[DEFAULT_NODE_ID]
+NODE_BY_CONTAINER = {ctx.container: ctx for ctx in NODES.values() if ctx.container}
+MULTI_NODE_ENABLED = len(NODES) > 1
+
+
+def get_node_context(node_id=None, container=None, allow_default=True):
+    if node_id:
+        node = NODES.get(str(node_id))
+        if node:
+            return node
+    if container:
+        node = NODE_BY_CONTAINER.get(str(container))
+        if node:
+            return node
+    if allow_default:
+        return DEFAULT_NODE
+    return None
+
+
+def resolve_node_from_request():
+    node_param = (request.args.get("node") or "").strip()
+    container_param = (request.args.get("container") or "").strip()
+    if request.method in {"POST", "PUT", "PATCH"}:
+        body = request.get_json(silent=True) or {}
+        node_param = body.get("node") or node_param
+        container_param = body.get("container") or body.get("name") or container_param
+    ctx = get_node_context(node_param, container_param, allow_default=True)
+    if not ctx:
+        abort(400, description="Unknown node selection")
+    return ctx
+
+
+@contextmanager
+def use_node_context(ctx: NodeContext):
+    with _context_swap_lock:
+        swap_map = {
+            "RPC_BASE": ctx.rpc_base,
+            "RPC_USER": ctx.rpc_user,
+            "RPC_PASS": ctx.rpc_pass,
+            "REMOTE_RPC_BASE": ctx.remote_rpc_base,
+            "REMOTE_RPC_METHOD": ctx.remote_rpc_method,
+            "REMOTE_RPC_TIMEOUT": ctx.remote_rpc_timeout,
+            "REMOTE_RPC_CACHE_SEC": ctx.remote_rpc_cache_sec,
+            "REMOTE_RPC_VERIFY": ctx.remote_rpc_verify,
+            "MINING_STATE_SYNC_CONTAINER": ctx.container or DEFAULT_NODE_SETTINGS["container"],
+            "CHAIN_DATA_DIR": ctx.chain_data_dir,
+            "CHAIN_BACKUP_DIR": ctx.chain_backup_dir,
+            "CHAIN_BACKUP_PREFIX": ctx.chain_backup_prefix,
+            "CHAIN_BACKUP_SUFFIX": ctx.chain_backup_suffix,
+            "CHAIN_BACKUP_MAX": ctx.chain_backup_max,
+            "lock": ctx.lock,
+            "history_lock": ctx.history_lock,
+            "height_series": ctx.height_series,
+            "remote_height_series": ctx.remote_height_series,
+            "peers_series": ctx.peers_series,
+            "lat_series": ctx.lat_series,
+            "activity_labels": ctx.activity_labels,
+            "activity_mined": ctx.activity_mined,
+            "activity_processed": ctx.activity_processed,
+            "activity_sealed": ctx.activity_sealed,
+            "_ACTIVITY_TOTALS": ctx.activity_totals,
+            "_ACTIVITY_TOTALS_LAST_TS": ctx.activity_totals_last_ts,
+            "_NODE_STATE_CACHE": ctx.node_state_cache,
+            "_NODE_STATE_DATA": ctx.node_state_data,
+            "_NODE_UPTIME_CACHE": ctx.node_uptime_cache,
+            "_REMOTE_HEIGHT_CACHE": ctx.remote_height_cache,
+            "_MINING_STATE_SYNC_CACHE": ctx.mining_state_sync_cache,
+            "_history_series": ctx.history_series,
+            "_history_state": ctx.history_state,
+            "_chain_job_lock": ctx.chain_job_lock,
+            "_chain_job_state": ctx.chain_job_state,
+            "_chain_job_context": ctx.chain_job_context,
+            "_chain_job_cancel_event": ctx.chain_job_cancel_event,
+            "_last_sample_meta": ctx.last_sample_meta,
+            "_CHART_SAMPLER_STARTED": ctx.chart_sampler_started,
+            "_height_zero_streak": getattr(ctx, "height_zero_streak", 0),
+            "_peers_zero_streak": getattr(ctx, "peers_zero_streak", 0),
+            "_last_good_height": getattr(ctx, "last_good_height", 0),
+            "_last_good_remote_height": getattr(ctx, "last_good_remote_height", 0),
+            "_last_activity_totals": getattr(ctx, "last_activity_totals", {"mined": 0.0, "processed": 0.0, "sealed": 0.0}),
+        }
+        previous = {key: globals().get(key) for key in swap_map}
+        for key, value in swap_map.items():
+            globals()[key] = value
+        try:
+            yield ctx
+        finally:
+            ctx.activity_totals = globals().get("_ACTIVITY_TOTALS", ctx.activity_totals)
+            ctx.activity_totals_last_ts = globals().get("_ACTIVITY_TOTALS_LAST_TS", ctx.activity_totals_last_ts)
+            ctx.node_state_cache = globals().get("_NODE_STATE_CACHE", ctx.node_state_cache)
+            ctx.node_state_data = globals().get("_NODE_STATE_DATA", ctx.node_state_data)
+            ctx.node_uptime_cache = globals().get("_NODE_UPTIME_CACHE", ctx.node_uptime_cache)
+            ctx.remote_height_cache = globals().get("_REMOTE_HEIGHT_CACHE", ctx.remote_height_cache)
+            ctx.mining_state_sync_cache = globals().get("_MINING_STATE_SYNC_CACHE", ctx.mining_state_sync_cache)
+            ctx.history_series = globals().get("_history_series", ctx.history_series)
+            ctx.history_state = globals().get("_history_state", ctx.history_state)
+            ctx.chain_job_state = globals().get("_chain_job_state", ctx.chain_job_state)
+            ctx.chain_job_context = globals().get("_chain_job_context", ctx.chain_job_context)
+            ctx.chain_job_cancel_event = globals().get("_chain_job_cancel_event", ctx.chain_job_cancel_event)
+            ctx.last_sample_meta = globals().get("_last_sample_meta", ctx.last_sample_meta)
+            ctx.chart_sampler_started = globals().get("_CHART_SAMPLER_STARTED", ctx.chart_sampler_started)
+            ctx.height_series = globals().get("height_series", ctx.height_series)
+            ctx.remote_height_series = globals().get("remote_height_series", ctx.remote_height_series)
+            ctx.peers_series = globals().get("peers_series", ctx.peers_series)
+            ctx.lat_series = globals().get("lat_series", ctx.lat_series)
+            ctx.activity_labels = globals().get("activity_labels", ctx.activity_labels)
+            ctx.activity_mined = globals().get("activity_mined", ctx.activity_mined)
+            ctx.activity_processed = globals().get("activity_processed", ctx.activity_processed)
+            ctx.activity_sealed = globals().get("activity_sealed", ctx.activity_sealed)
+            ctx.height_zero_streak = globals().get("_height_zero_streak", ctx.height_zero_streak)
+            ctx.peers_zero_streak = globals().get("_peers_zero_streak", ctx.peers_zero_streak)
+            ctx.last_good_height = globals().get("_last_good_height", getattr(ctx, "last_good_height", 0))
+            ctx.last_good_remote_height = globals().get("_last_good_remote_height", getattr(ctx, "last_good_remote_height", 0))
+            ctx.last_activity_totals = globals().get("_last_activity_totals", getattr(ctx, "last_activity_totals", {"mined": 0.0, "processed": 0.0, "sealed": 0.0}))
+            for key, value in previous.items():
+                globals()[key] = value
+
+
+# Bind default node state to global references for backward compatibility
+RPC_BASE = DEFAULT_NODE.rpc_base
+RPC_USER = DEFAULT_NODE.rpc_user
+RPC_PASS = DEFAULT_NODE.rpc_pass
+REMOTE_RPC_BASE = DEFAULT_NODE.remote_rpc_base
+REMOTE_RPC_METHOD = DEFAULT_NODE.remote_rpc_method
+REMOTE_RPC_TIMEOUT = DEFAULT_NODE.remote_rpc_timeout
+REMOTE_RPC_CACHE_SEC = DEFAULT_NODE.remote_rpc_cache_sec
+REMOTE_RPC_VERIFY = DEFAULT_NODE.remote_rpc_verify
+MINING_STATE_SYNC_CONTAINER = DEFAULT_NODE.container or MINING_STATE_SYNC_CONTAINER
+CHAIN_DATA_DIR = DEFAULT_NODE.chain_data_dir
+CHAIN_BACKUP_DIR = DEFAULT_NODE.chain_backup_dir
+CHAIN_BACKUP_PREFIX = DEFAULT_NODE.chain_backup_prefix
+CHAIN_BACKUP_SUFFIX = DEFAULT_NODE.chain_backup_suffix
+CHAIN_BACKUP_MAX = DEFAULT_NODE.chain_backup_max
+
+lock = DEFAULT_NODE.lock
+history_lock = DEFAULT_NODE.history_lock
+height_series = DEFAULT_NODE.height_series
+remote_height_series = DEFAULT_NODE.remote_height_series
+peers_series = DEFAULT_NODE.peers_series
+lat_series = DEFAULT_NODE.lat_series
+activity_labels = DEFAULT_NODE.activity_labels
+activity_mined = DEFAULT_NODE.activity_mined
+activity_processed = DEFAULT_NODE.activity_processed
+activity_sealed = DEFAULT_NODE.activity_sealed
+
+globals()["_ACTIVITY_TOTALS"] = DEFAULT_NODE.activity_totals
+globals()["_ACTIVITY_TOTALS_LAST_TS"] = DEFAULT_NODE.activity_totals_last_ts
+globals()["_NODE_STATE_CACHE"] = DEFAULT_NODE.node_state_cache
+globals()["_NODE_STATE_DATA"] = DEFAULT_NODE.node_state_data
+globals()["_NODE_UPTIME_CACHE"] = DEFAULT_NODE.node_uptime_cache
+globals()["_REMOTE_HEIGHT_CACHE"] = DEFAULT_NODE.remote_height_cache
+globals()["_MINING_STATE_SYNC_CACHE"] = DEFAULT_NODE.mining_state_sync_cache
+globals()["_history_series"] = DEFAULT_NODE.history_series
+globals()["_history_state"] = DEFAULT_NODE.history_state
+_chain_job_lock = DEFAULT_NODE.chain_job_lock
+_chain_job_state = DEFAULT_NODE.chain_job_state
+_chain_job_context = DEFAULT_NODE.chain_job_context
+_chain_job_cancel_event = DEFAULT_NODE.chain_job_cancel_event
+globals()["_last_sample_meta"] = DEFAULT_NODE.last_sample_meta
+globals()["_CHART_SAMPLER_STARTED"] = DEFAULT_NODE.chart_sampler_started
+globals()["_height_zero_streak"] = getattr(DEFAULT_NODE, "height_zero_streak", 0)
+globals()["_peers_zero_streak"] = getattr(DEFAULT_NODE, "peers_zero_streak", 0)
+globals()["_last_good_height"] = getattr(DEFAULT_NODE, "last_good_height", 0)
+globals()["_last_good_remote_height"] = getattr(DEFAULT_NODE, "last_good_remote_height", 0)
 def _check_chain_job_cancelled():
     if _chain_job_cancel_event.is_set():
         raise ChainJobCancelled("Chain job cancelled")
@@ -292,7 +670,6 @@ def _rate_series_from(labels, values):
 
 lock = threading.Lock()
 
-HISTORY_POINTS = int(os.getenv("BDAG_HISTORY_POINTS", "720"))
 history_lock = threading.Lock()
 # height history intentionally omitted to keep height chart live-only
 _history_series = {
@@ -375,39 +752,47 @@ def _history_push(ts_ms, height, peers, latency, mined, processed, sealed, activ
 
 
 def _node_state_cache():
-    return globals().setdefault("_NODE_STATE_CACHE", {
-        "last_height": None,
-        "last_ts": None,
-        "last_progress_ts": None,
-    })
+    payload = globals().get("_NODE_STATE_CACHE")
+    if not isinstance(payload, dict):
+        payload = {
+            "last_height": None,
+            "last_ts": None,
+            "last_progress_ts": None,
+        }
+        globals()["_NODE_STATE_CACHE"] = payload
+    return payload
 
 
 def _node_state_store():
-    return globals().setdefault("_NODE_STATE_DATA", {
-        "code": "unknown",
-        "label": "Unknown",
-        "detail": "",
-        "color": "#9aa4c7",
-        "updated_ts": int(time.time()*1000),
-        "height_rate": 0.0,
-        "activity": {
-            "mined": 0.0,
-            "processed": 0.0,
-            "sealed": 0.0,
-            "total": 0.0,
-            "totals": {
+    payload = globals().get("_NODE_STATE_DATA")
+    if not isinstance(payload, dict):
+        payload = {
+            "code": "unknown",
+            "label": "Unknown",
+            "detail": "",
+            "color": "#9aa4c7",
+            "updated_ts": int(time.time() * 1000),
+            "height_rate": 0.0,
+            "activity": {
                 "mined": 0.0,
                 "processed": 0.0,
                 "sealed": 0.0,
-                "sum": 0.0,
+                "total": 0.0,
+                "totals": {
+                    "mined": 0.0,
+                    "processed": 0.0,
+                    "sealed": 0.0,
+                    "sum": 0.0,
+                },
             },
-        },
-        "height": 0.0,
-        "peers": 0,
-        "latency_ms": 0,
-        "uptime_sec": 0,
-        "since_height_change_sec": 0,
-    })
+            "height": 0.0,
+            "peers": 0,
+            "latency_ms": 0,
+            "uptime_sec": 0,
+            "since_height_change_sec": 0,
+        }
+        globals()["_NODE_STATE_DATA"] = payload
+    return payload
 
 
 def _history_pack(key):
@@ -871,6 +1256,36 @@ def sample_once():
         pass
     ensure_activity_defaults()
     safe_height = int(max(_finite(resolved_height if resolved_height is not None else 0, 0.0), 0.0))
+    if isinstance(h, (int, float)):
+        raw_rpc_height = int(max(_finite(h, 0.0), 0.0))
+    else:
+        try:
+            raw_rpc_height = int(h, 16) if isinstance(h, str) and h.startswith("0x") else 0
+        except Exception:
+            raw_rpc_height = 0
+    raw_height_valid = raw_rpc_height > 0
+    last_good_height = int(globals().get("_last_good_height", 0) or 0)
+    if raw_height_valid:
+        safe_height = raw_rpc_height
+    else:
+        if safe_height > HEIGHT_JUMP_THRESHOLD:
+            safe_height = last_good_height if last_good_height > 0 else 0
+        if safe_height > 0:
+            raw_height_valid = False
+            fallback_height_used = True
+        else:
+            fallback_height_used = False
+    if raw_height_valid:
+        fallback_height_used = False
+    if safe_height > 100000:
+        try:
+            app.logger.debug("sample_once raw height large: raw=%s resolved=%s", h, safe_height)
+        except Exception:
+            pass
+    prev_meta = globals().get("_last_sample_meta") or {}
+    prev_display_height = prev_meta.get("height_display")
+    prev_display_peers = prev_meta.get("peers_display")
+    fallback_height_used = bool(not raw_height_valid and safe_height > 0)
     safe_peers = int(max(_finite(resolved_peers if resolved_peers is not None else 0, 0.0), 0.0))
     safe_latency = int(max(_finite(rpc_latency_ms, 0.0), 0.0))
     mined_val = max(_finite(mined_val, 0.0), 0.0)
@@ -883,12 +1298,98 @@ def sample_once():
             remote_height_val = int(max(_finite(remote_height_raw, 0.0), 0.0))
     except Exception:
         remote_height_val = None
+    last_good_remote_height = int(globals().get("_last_good_remote_height", 0) or 0)
+    if remote_height_val and remote_height_val > 0:
+        if last_good_remote_height > 0 and remote_height_val > last_good_remote_height + HEIGHT_JUMP_THRESHOLD:
+            remote_height_val = last_good_remote_height
+        else:
+            last_good_remote_height = remote_height_val
+    elif last_good_remote_height > 0:
+        remote_height_val = last_good_remote_height
+    else:
+        remote_height_val = 0
     totals_snapshot = None
+    display_height = safe_height
+    display_peers = safe_peers
+    chart_height_val = safe_height
+    chart_peers_val = safe_peers
+    if safe_height > 0:
+        last_good_height = safe_height
+    elif last_good_height > 0:
+        safe_height = last_good_height
+        fallback_height_used = True
+        raw_height_valid = False
+    else:
+        safe_height = 0
     with lock:
-        height_series.append((now_ms, safe_height))
+        last_height_sample = height_series[-1][1] if height_series else None
+        last_peers_sample = peers_series[-1][1] if peers_series else None
+        prev_height_candidate = None
+        if isinstance(prev_display_height, (int, float)) and prev_display_height > 0:
+            prev_height_candidate = float(prev_display_height)
+        elif isinstance(last_height_sample, (int, float)) and last_height_sample > 0:
+            prev_height_candidate = float(last_height_sample)
+        prev_peers_candidate = None
+        if isinstance(prev_display_peers, (int, float)) and prev_display_peers > 0:
+            prev_peers_candidate = float(prev_display_peers)
+        elif isinstance(last_peers_sample, (int, float)) and last_peers_sample > 0:
+            prev_peers_candidate = float(last_peers_sample)
+        height_zero_streak = int(globals().get("_height_zero_streak", 0) or 0)
+        peers_zero_streak = int(globals().get("_peers_zero_streak", 0) or 0)
+        height_hold_threshold = 3
+        peer_hold_threshold = 6
+
+        if prev_height_candidate and prev_height_candidate > 0:
+            if safe_height > prev_height_candidate and (safe_height - prev_height_candidate) > HEIGHT_JUMP_THRESHOLD:
+                safe_height = int(prev_height_candidate)
+                fallback_height_used = True
+                raw_height_valid = False
+
+        if fallback_height_used:
+            if prev_height_candidate and prev_height_candidate > 0:
+                display_height = int(prev_height_candidate)
+                chart_height_val = int(prev_height_candidate)
+            else:
+                display_height = 0
+                chart_height_val = 0
+            if safe_height <= 0:
+                height_zero_streak += 1
+            else:
+                height_zero_streak = 0
+        else:
+            if safe_height <= 0:
+                height_zero_streak += 1
+            else:
+                height_zero_streak = 0
+            if safe_height <= 0 and ok and prev_height_candidate and height_zero_streak <= height_hold_threshold:
+                display_height = int(prev_height_candidate)
+                chart_height_val = int(prev_height_candidate)
+            else:
+                display_height = safe_height
+                chart_height_val = display_height
+        globals()["_height_zero_streak"] = height_zero_streak
+        if display_height > 0:
+            last_good_height = int(display_height)
+        globals()["_last_good_height"] = last_good_height
+
+        if safe_peers <= 0:
+            peers_zero_streak += 1
+        else:
+            peers_zero_streak = 0
+        if safe_peers <= 0 and ok and prev_peers_candidate and peers_zero_streak <= peer_hold_threshold:
+            display_peers = int(prev_peers_candidate)
+        else:
+            display_peers = safe_peers
+        if safe_peers <= 0 and ok and prev_peers_candidate and peers_zero_streak <= peer_hold_threshold:
+            chart_peers_val = int(prev_peers_candidate)
+        else:
+            chart_peers_val = display_peers
+        globals()["_peers_zero_streak"] = peers_zero_streak
+        height_series.append((now_ms, chart_height_val))
         remote_height_series.append((now_ms, remote_height_val if remote_height_val is not None else None))
-        peers_series.append((now_ms, safe_peers))
+        peers_series.append((now_ms, chart_peers_val))
         lat_series.append((now_ms, safe_latency))
+        globals()["_last_good_remote_height"] = last_good_remote_height
         totals = _activity_totals_state()
         last_totals_ts = globals().get("_ACTIVITY_TOTALS_LAST_TS")
         if last_totals_ts is None:
@@ -906,12 +1407,35 @@ def sample_once():
             "processed": float(totals.get("processed", 0.0) or 0.0),
             "sealed": float(totals.get("sealed", 0.0) or 0.0),
         }
+        prev_totals = globals().get("_last_activity_totals") or prev_meta.get("activity_totals") or {}
+        mined_prev = float(prev_totals.get("mined", 0.0) or 0.0)
+        processed_prev = float(prev_totals.get("processed", 0.0) or 0.0)
+        sealed_prev = float(prev_totals.get("sealed", 0.0) or 0.0)
+        if mined_prev > 0 and totals_snapshot["mined"] > mined_prev:
+            if totals_snapshot["mined"] - mined_prev > ACTIVITY_JUMP_THRESHOLD:
+                totals_snapshot["mined"] = mined_prev
+                totals["mined"] = mined_prev
+                mined_val = 0.0
+                inc_mined = 0.0
+        if processed_prev > 0 and totals_snapshot["processed"] > processed_prev:
+            if totals_snapshot["processed"] - processed_prev > ACTIVITY_JUMP_THRESHOLD:
+                totals_snapshot["processed"] = processed_prev
+                totals["processed"] = processed_prev
+                processed_val = 0.0
+                inc_processed = 0.0
+        if sealed_prev > 0 and totals_snapshot["sealed"] > sealed_prev:
+            if totals_snapshot["sealed"] - sealed_prev > ACTIVITY_JUMP_THRESHOLD:
+                totals_snapshot["sealed"] = sealed_prev
+                totals["sealed"] = sealed_prev
+                sealed_val = 0.0
+                inc_sealed = 0.0
         globals()["_ACTIVITY_TOTALS_LAST_TS"] = now_ms
         if inc_mined or inc_processed or inc_sealed or not activity_labels:
             activity_labels.append(now_ms)
             activity_mined.append(totals_snapshot["mined"])
             activity_processed.append(totals_snapshot["processed"])
             activity_sealed.append(totals_snapshot["sealed"])
+    globals()["_last_good_remote_height"] = last_good_remote_height
     if totals_snapshot is None:
         totals_snapshot = _activity_totals_snapshot()
     activity_totals_sum = max(_finite(
@@ -927,7 +1451,7 @@ def sample_once():
     except Exception:
         node_uptime_sec = 0
     try:
-        _history_push(now_ms, safe_height, safe_peers, safe_latency,
+        _history_push(now_ms, display_height, display_peers, safe_latency,
                       totals_snapshot["mined"], totals_snapshot["processed"], totals_snapshot["sealed"],
                       activity_totals_sum, remote_height_val)
     except Exception:
@@ -936,7 +1460,9 @@ def sample_once():
         "ok": ok,
         "health_text": health_text,
         "height": safe_height,
+        "height_display": display_height,
         "peers": safe_peers,
+        "peers_display": display_peers,
         "rpc_latency_ms": safe_latency,
         "height_remote": remote_height_val,
         "activity": {
@@ -954,7 +1480,9 @@ def sample_once():
         "ts_ms": now_ms,
         "node_uptime_sec": node_uptime_sec,
     }
+    sample_meta["activity_totals"] = dict(totals_snapshot)
     globals()["_last_sample_meta"] = sample_meta
+    globals()["_last_activity_totals"] = dict(totals_snapshot)
     try:
         _update_node_state(sample_meta)
     except Exception:
@@ -970,16 +1498,36 @@ def ensure_activity_defaults():
             activity_processed.append(0)
             activity_sealed.append(0)
 
-def sampler():
-    ensure_activity_defaults()
+def sampler(ctx: NodeContext):
+    with use_node_context(ctx):
+        ensure_activity_defaults()
     while True:
-        try:
-            sample_once()
-        except Exception:
-            pass
+        with use_node_context(ctx):
+            if app.logger.isEnabledFor(logging.DEBUG):
+                app.logger.debug("[sampler] node=%s tick", ctx.id)
+            try:
+                sample_once()
+            except Exception as exc:
+                try:
+                    app.logger.debug("sampler error for %s: %s", ctx.id, exc)
+                except Exception:
+                    pass
         time.sleep(max(1, SAMPLE_SEC))
 
-threading.Thread(target=sampler, daemon=True).start()
+
+_sampler_threads_started = False
+
+def start_node_samplers():
+    global _sampler_threads_started
+    if _sampler_threads_started:
+        return
+    _sampler_threads_started = True
+    for node_ctx in NODES.values():
+        threading.Thread(target=sampler, args=(node_ctx,), daemon=True).start()
+
+
+start_node_samplers()
+
 
 # ----- Utils -----
 def _series_to_payload(series):
@@ -1014,6 +1562,26 @@ def _average_height_rate(window_sec=300):
         return None
     return max(rate, 0.0)
 
+def _series_has_activity(series, threshold=1e-6):
+    for val in series or []:
+        try:
+            if float(val) > threshold:
+                return True
+        except Exception:
+            continue
+    return False
+
+def _sync_series_clone(labels, sync_rate):
+    length = len(labels)
+    out = []
+    for idx in range(length):
+        try:
+            val = sync_rate[idx]
+        except Exception:
+            val = 0.0
+        out.append(max(_finite(val, 0.0), 0.0))
+    return out
+
 def _apply_window_points(points:int):
     """Adjust in-memory window length (number of points) for all series."""
     global WINDOW
@@ -1047,56 +1615,65 @@ def index():
 # ----- Status & charts -----
 @app.route("/api/status")
 def status():
-    ok, health_text, h, p, rpc_latency_ms, remote_h = sample_once()
-    node_state = _current_node_state()
-    local_height = int(h) if h is not None else 0
-    remote_height_val = None
-    if remote_h is not None:
-        try:
-            remote_height_val = int(remote_h)
-        except Exception:
-            remote_height_val = None
-    if remote_height_val is None:
-        remote_height = get_remote_height()
-        if remote_height is not None:
+    ctx = resolve_node_from_request()
+    with use_node_context(ctx):
+        ok, health_text, h, p, rpc_latency_ms, remote_h = sample_once()
+        node_state = _current_node_state()
+        sample_meta = globals().get("_last_sample_meta") or {}
+        display_height_val = sample_meta.get("height_display")
+        display_peers_val = sample_meta.get("peers_display")
+        raw_height_val = sample_meta.get("height", h)
+        raw_peers_val = sample_meta.get("peers", p)
+        local_height = int(display_height_val) if display_height_val is not None else int(raw_height_val) if raw_height_val is not None else 0
+        remote_height_val = None
+        if remote_h is not None:
             try:
-                remote_height_val = int(remote_height)
+                remote_height_val = int(remote_h)
             except Exception:
                 remote_height_val = None
-    mining_state_sync = is_mining_state_sync_enabled()
-    avg_height_rate_5m = None
-    try:
-        avg_height_rate_5m = _average_height_rate(300)
-    except Exception:
+        if remote_height_val is None:
+            remote_height = get_remote_height()
+            if remote_height is not None:
+                try:
+                    remote_height_val = int(remote_height)
+                except Exception:
+                    remote_height_val = None
+        mining_state_sync = is_mining_state_sync_enabled()
         avg_height_rate_5m = None
-    eta_to_sync_sec = None
-    if remote_height_val is not None:
-        remaining = max(int(remote_height_val) - int(local_height), 0)
-        if remaining <= 0:
-            eta_to_sync_sec = 0
-        elif avg_height_rate_5m and avg_height_rate_5m > 0:
-            eta_to_sync_sec = int(max(remaining / avg_height_rate_5m, 0))
-    try:
-        node_uptime_sec = int(max(_finite(node_state.get("uptime_sec"), 0.0), 0.0))
-    except Exception:
-        node_uptime_sec = 0
-    if node_uptime_sec <= 0:
         try:
-            node_uptime_val = get_node_uptime_sec()
-            if node_uptime_val is not None:
-                node_uptime_sec = int(max(_finite(node_uptime_val, 0.0), 0.0))
+            avg_height_rate_5m = _average_height_rate(300)
         except Exception:
-            pass
-    if isinstance(node_state, dict):
-        node_state["eta_to_sync_sec"] = eta_to_sync_sec
-        if avg_height_rate_5m is not None and math.isfinite(avg_height_rate_5m):
-            node_state["height_rate_5m"] = max(float(avg_height_rate_5m), 0.0)
+            avg_height_rate_5m = None
+        eta_to_sync_sec = None
+        if remote_height_val is not None:
+            remaining = max(int(remote_height_val) - int(local_height), 0)
+            if remaining <= 0:
+                eta_to_sync_sec = 0
+            elif avg_height_rate_5m and avg_height_rate_5m > 0:
+                eta_to_sync_sec = int(max(remaining / avg_height_rate_5m, 0))
+        try:
+            node_uptime_sec = int(max(_finite(node_state.get("uptime_sec"), 0.0), 0.0))
+        except Exception:
+            node_uptime_sec = 0
+        if node_uptime_sec <= 0:
+            try:
+                node_uptime_val = get_node_uptime_sec()
+                if node_uptime_val is not None:
+                    node_uptime_sec = int(max(_finite(node_uptime_val, 0.0), 0.0))
+            except Exception:
+                pass
+        if isinstance(node_state, dict):
+            node_state["eta_to_sync_sec"] = eta_to_sync_sec
+            if avg_height_rate_5m is not None and math.isfinite(avg_height_rate_5m):
+                node_state["height_rate_5m"] = max(float(avg_height_rate_5m), 0.0)
+            else:
+                node_state["height_rate_5m"] = None
+            node_state["height_display"] = local_height
+            node_state["peers_display"] = int(display_peers_val) if display_peers_val is not None else int(raw_peers_val or 0)
+            node_state_payload = dict(node_state)
         else:
-            node_state["height_rate_5m"] = None
-        node_state_payload = dict(node_state)
-    else:
-        node_state_payload = node_state or {}
-    return jsonify({
+            node_state_payload = node_state or {}
+    payload = {
         "ok": ok,
         "status": "ok" if ok else "degraded",
         "health": "ok" if ok else "degraded",
@@ -1105,7 +1682,7 @@ def status():
         "height_local": local_height,
         "height_remote": remote_height_val,
         "mining_state_sync": mining_state_sync,
-        "peers": int(p),
+        "peers": int(display_peers_val) if display_peers_val is not None else int(raw_peers_val or 0),
         "rpc_latency_ms": int(rpc_latency_ms),
         "last_seen_ts": int(time.time()*1000),
         "freshness_ms": int((time.time()-APP_START)*1000),
@@ -1114,39 +1691,82 @@ def status():
         "uptime_sec": node_uptime_sec,
         "node_state": node_state_payload,
         "eta_to_sync_sec": eta_to_sync_sec,
-    })
+        "node": ctx.id,
+        "node_label": ctx.label,
+        "container": ctx.container,
+        "chain_data_dir": str(ctx.chain_data_dir),
+        "chain_backup_dir": str(ctx.chain_backup_dir),
+    }
+    payload["height_raw"] = int(raw_height_val or 0) if raw_height_val is not None else 0
+    payload["peers_raw"] = int(raw_peers_val or 0) if raw_peers_val is not None else 0
+    return jsonify(payload)
 
 @app.route("/api/chart/height")
 def chart_height():
-    with lock:
-        local_points = list(height_series)
-        remote_points = list(remote_height_series)
-    labels = [ts for ts, _ in local_points]
-    local = [val for _, val in local_points]
-    remote_lookup = {ts: val for ts, val in remote_points}
-    remote = [remote_lookup.get(ts) for ts in labels]
+    ctx = resolve_node_from_request()
+    if app.logger.isEnabledFor(logging.DEBUG):
+        app.logger.debug("[charts] height node=%s", ctx.id)
+    with use_node_context(ctx):
+        with lock:
+            local_points = list(height_series)
+            remote_points = list(remote_height_series)
+        labels = [ts for ts, _ in local_points]
+        local = [val for _, val in local_points]
+        remote_lookup = {ts: val for ts, val in remote_points}
+        remote = [remote_lookup.get(ts) for ts in labels]
     return jsonify({
         "labels": labels,
         "local": local,
         "remote": remote,
         "len": len(labels),
+        "node": ctx.id,
     })
 
 @app.route("/api/chart/peers")
 def chart_peers():
-    return jsonify(_series_to_payload(peers_series))
+    ctx = resolve_node_from_request()
+    if app.logger.isEnabledFor(logging.DEBUG):
+        app.logger.debug("[charts] peers node=%s", ctx.id)
+    with use_node_context(ctx):
+        payload = _series_to_payload(peers_series)
+    payload["node"] = ctx.id
+    return jsonify(payload)
 
 @app.route("/api/chart/latency")
 def chart_latency():
-    return jsonify(_series_to_payload(lat_series))
+    ctx = resolve_node_from_request()
+    if app.logger.isEnabledFor(logging.DEBUG):
+        app.logger.debug("[charts] latency node=%s", ctx.id)
+    with use_node_context(ctx):
+        payload = _series_to_payload(lat_series)
+    payload["node"] = ctx.id
+    return jsonify(payload)
+
+
+@app.route("/api/history")
+def api_history():
+    ctx = resolve_node_from_request()
+    with use_node_context(ctx):
+        payload = _history_payload()
+    payload["node"] = ctx.id
+    payload["_series_len"] = len(payload.get("height_local", {}).get("series", []))
+    payload["_source"] = "new"
+    return jsonify(payload)
+
 
 @app.route("/api/chart/activity")
 def chart_activity():
-    try:
-        hist_payload = _history_payload()
-    except Exception:
-        hist_payload = {}
+    ctx = resolve_node_from_request()
+    if app.logger.isEnabledFor(logging.DEBUG):
+        app.logger.debug("[charts] activity node=%s", ctx.id)
+    with use_node_context(ctx):
+        try:
+            hist_payload = _history_payload()
+        except Exception:
+            hist_payload = {}
     labels = (hist_payload.get("activity") or {}).get("labels") or []
+    activity_fallback = False
+    sync_fallback = None
     if labels:
         totals_raw = (hist_payload.get("activity") or {}).get("series") or []
         totals = [max(_finite(totals_raw[idx], 0.0), 0.0) if idx < len(totals_raw) else 0.0 for idx in range(len(labels))]
@@ -1155,8 +1775,18 @@ def chart_activity():
         if sync_raw:
             sync_rate = [max(_finite(sync_raw[idx], 0.0), 0.0) if idx < len(sync_raw) else 0.0 for idx in range(len(labels))]
         else:
-            height_series = (hist_payload.get("height_local") or {}).get("series") or []
-            sync_rate = _rate_series_from(labels, height_series)
+            height_series_hist = (hist_payload.get("height_local") or {}).get("series") or []
+            sync_rate = _rate_series_from(labels, height_series_hist)
+        if not _series_has_activity(sync_rate):
+            remote_series_hist = (hist_payload.get("height_remote") or {}).get("series") or []
+            if remote_series_hist:
+                remote_rate = _rate_series_from(labels, remote_series_hist)
+                if _series_has_activity(remote_rate):
+                    sync_rate = remote_rate
+                    sync_fallback = "remote"
+        if not _series_has_activity(activity_rate) and _series_has_activity(sync_rate):
+            activity_rate = _sync_series_clone(labels, sync_rate)
+            activity_fallback = True
         return jsonify({
             "labels": labels,
             "activity_rate": activity_rate,
@@ -1164,16 +1794,24 @@ def chart_activity():
             "rate": activity_rate,
             "total": totals,
             "height_dx": sync_rate,
-            "len": len(labels)
+            "len": len(labels),
+            "node": ctx.id,
+            "activity_fallback": activity_fallback,
+            "sync_fallback": sync_fallback
         })
-    hist = globals().get("_hist")
-    hist_lock = globals().get("_hist_lock")
-    if hist and hist_lock:
-        with hist_lock:
-            labels = [ts for ts,_ in hist.get("activity", [])]
-            total_series_raw = [v for _,v in hist.get("activity", [])]
-            height_dx_series = [v for _,v in hist.get("height_dx", [])]
-            height_local_series_raw = [v for _,v in hist.get("height_local", [])]
+    hist_store = None
+    if '_hist_store' in globals():
+        try:
+            with _hist_lock:
+                hist_store, _ = _hist_store(ctx.id)
+        except Exception:
+            hist_store = None
+    if hist_store:
+        labels = [ts for ts,_ in hist_store.get("activity", [])]
+        total_series_raw = [v for _,v in hist_store.get("activity", [])]
+        height_dx_series = [v for _,v in hist_store.get("height_dx", [])]
+        height_local_series_raw = [v for _,v in hist_store.get("height_local", [])]
+        height_remote_series_raw = [v for _,v in hist_store.get("height_remote", [])]
         if labels:
             totals = [max(_finite(total_series_raw[idx], 0.0), 0.0) if idx < len(total_series_raw) else 0.0 for idx in range(len(labels))]
             activity_rate = _rate_series_from(labels, totals)
@@ -1181,6 +1819,14 @@ def chart_activity():
                 sync_rate = [max(_finite(height_dx_series[idx], 0.0), 0.0) if idx < len(height_dx_series) else 0.0 for idx in range(len(labels))]
             else:
                 sync_rate = _rate_series_from(labels, [height_local_series_raw[idx] if idx < len(height_local_series_raw) else 0.0 for idx in range(len(labels))])
+            if not _series_has_activity(sync_rate) and height_remote_series_raw:
+                remote_rate = _rate_series_from(labels, height_remote_series_raw)
+                if _series_has_activity(remote_rate):
+                    sync_rate = remote_rate
+                    sync_fallback = "remote"
+            if not _series_has_activity(activity_rate) and _series_has_activity(sync_rate):
+                activity_rate = _sync_series_clone(labels, sync_rate)
+                activity_fallback = True
             return jsonify({
                 "labels": labels,
                 "activity_rate": activity_rate,
@@ -1188,12 +1834,16 @@ def chart_activity():
                 "rate": activity_rate,
                 "total": totals,
                 "height_dx": sync_rate,
-                "len": len(labels)
+                "len": len(labels),
+                "node": ctx.id,
+                "activity_fallback": activity_fallback,
+                "sync_fallback": sync_fallback
             })
     with lock:
         labels = list(activity_labels)
         totals = _activity_total_series_locked()
         height_points = list(height_series)
+        remote_points = list(remote_height_series)
     activity_rate = _rate_series_from(labels, totals)
     height_rate_map = {}
     if height_points:
@@ -1202,6 +1852,21 @@ def chart_activity():
         height_rates = _rate_series_from(height_labels, height_values)
         height_rate_map = {height_labels[idx]: height_rates[idx] for idx in range(len(height_labels))}
     sync_rate = [max(_finite(height_rate_map.get(ts, 0.0), 0.0), 0.0) for ts in labels]
+    if remote_points:
+        remote_labels = [ts for ts,_ in remote_points]
+        remote_values = [val for _,val in remote_points]
+        remote_rates = _rate_series_from(remote_labels, remote_values)
+        remote_rate_map = {remote_labels[idx]: remote_rates[idx] for idx in range(len(remote_labels))}
+    else:
+        remote_rate_map = {}
+    if not _series_has_activity(sync_rate) and remote_rate_map:
+        remote_sync = [max(_finite(remote_rate_map.get(ts, 0.0), 0.0), 0.0) for ts in labels]
+        if _series_has_activity(remote_sync):
+            sync_rate = remote_sync
+            sync_fallback = "remote"
+    if not _series_has_activity(activity_rate) and _series_has_activity(sync_rate):
+        activity_rate = _sync_series_clone(labels, sync_rate)
+        activity_fallback = True
     return jsonify({
         "labels": labels,
         "activity_rate": activity_rate,
@@ -1209,7 +1874,10 @@ def chart_activity():
         "rate": activity_rate,
         "total": totals,
         "height_dx": sync_rate,
-        "len": len(labels)
+        "len": len(labels),
+        "node": ctx.id,
+        "activity_fallback": activity_fallback,
+        "sync_fallback": sync_fallback
     })
 
 # Accept totals (inc or abs)
@@ -1715,122 +2383,159 @@ def _chain_delete_task(container_name: str, backup_name: str):
         _chain_job_finish(status, message, details=details)
 
 
-def trigger_chain_backup(container_name: str):
-    try:
-        _ensure_backup_dir()
-    except Exception as exc:
-        return False, str(exc)
-    note = f"Preparing chain backup for {container_name}" if container_name else "Preparing chain backup"
-    try:
-        _chain_job_start("backup", f"{note}…", {"container": container_name})
-    except RuntimeError as exc:
-        return False, str(exc)
-    thread = threading.Thread(target=_chain_backup_task, args=(container_name,), daemon=True)
-    _chain_job_set_thread(thread)
-    thread.start()
+def trigger_chain_backup(container_name: str, ctx: NodeContext):
+    target_container = container_name or ctx.container
+    with use_node_context(ctx):
+        try:
+            _ensure_backup_dir()
+        except Exception as exc:
+            return False, str(exc)
+        note = f"Preparing chain backup for {target_container}" if target_container else "Preparing chain backup"
+        try:
+            _chain_job_start("backup", f"{note}…", {"container": target_container})
+        except RuntimeError as exc:
+            return False, str(exc)
+        def runner():
+            with use_node_context(ctx):
+                _chain_backup_task(target_container)
+        thread = threading.Thread(target=runner, daemon=True)
+        _chain_job_set_thread(thread)
+        thread.start()
     return True, "Chain backup started"
 
 
-def trigger_chain_restore(container_name: str, backup_name: str):
-    try:
-        _ensure_backup_dir()
-    except Exception as exc:
-        return False, str(exc)
-    backup_path = (CHAIN_BACKUP_DIR / backup_name).resolve()
-    try:
-        backup_path.relative_to(CHAIN_BACKUP_DIR.resolve())
-    except ValueError:
-        return False, "Invalid backup selection"
-    if not backup_path.exists():
-        return False, f"Backup not found: {backup_name}"
-    note = f"Restoring chain data from {backup_name}" if backup_name else "Restoring chain data"
-    try:
-        _chain_job_start("restore", f"{note}…", {"container": container_name, "backup": backup_name})
-    except RuntimeError as exc:
-        return False, str(exc)
-    thread = threading.Thread(target=_chain_restore_task, args=(container_name, backup_name), daemon=True)
-    _chain_job_set_thread(thread)
-    thread.start()
+def trigger_chain_restore(container_name: str, backup_name: str, ctx: NodeContext):
+    target_container = container_name or ctx.container
+    with use_node_context(ctx):
+        try:
+            _ensure_backup_dir()
+        except Exception as exc:
+            return False, str(exc)
+        backup_path = (CHAIN_BACKUP_DIR / backup_name).resolve()
+        try:
+            backup_path.relative_to(CHAIN_BACKUP_DIR.resolve())
+        except ValueError:
+            return False, "Invalid backup selection"
+        if not backup_path.exists():
+            return False, f"Backup not found: {backup_name}"
+        note = f"Restoring chain data from {backup_name}" if backup_name else "Restoring chain data"
+        try:
+            _chain_job_start("restore", f"{note}…", {"container": target_container, "backup": backup_name})
+        except RuntimeError as exc:
+            return False, str(exc)
+        def runner():
+            with use_node_context(ctx):
+                _chain_restore_task(target_container, backup_name)
+        thread = threading.Thread(target=runner, daemon=True)
+        _chain_job_set_thread(thread)
+        thread.start()
     return True, "Chain restore started"
 
 
-def trigger_chain_delete(container_name: str, backup_name: str):
-    try:
-        _ensure_backup_dir()
-    except Exception as exc:
-        return False, str(exc)
-    backup_path = (CHAIN_BACKUP_DIR / backup_name).resolve()
-    try:
-        backup_path.relative_to(CHAIN_BACKUP_DIR.resolve())
-    except ValueError:
-        return False, "Invalid backup selection"
-    if not backup_path.exists():
-        return False, f"Backup not found: {backup_name}"
-    note = f"Deleting chain backup {backup_name}" if backup_name else "Deleting chain backup"
-    try:
-        _chain_job_start("delete", f"{note}…", {"container": container_name, "backup": backup_name})
-    except RuntimeError as exc:
-        return False, str(exc)
-    thread = threading.Thread(target=_chain_delete_task, args=(container_name, backup_name), daemon=True)
-    _chain_job_set_thread(thread)
-    thread.start()
+def trigger_chain_delete(container_name: str, backup_name: str, ctx: NodeContext):
+    target_container = container_name or ctx.container
+    with use_node_context(ctx):
+        try:
+            _ensure_backup_dir()
+        except Exception as exc:
+            return False, str(exc)
+        backup_path = (CHAIN_BACKUP_DIR / backup_name).resolve()
+        try:
+            backup_path.relative_to(CHAIN_BACKUP_DIR.resolve())
+        except ValueError:
+            return False, "Invalid backup selection"
+        if not backup_path.exists():
+            return False, f"Backup not found: {backup_name}"
+        note = f"Deleting chain backup {backup_name}" if backup_name else "Deleting chain backup"
+        try:
+            _chain_job_start("delete", f"{note}…", {"container": target_container, "backup": backup_name})
+        except RuntimeError as exc:
+            return False, str(exc)
+        def runner():
+            with use_node_context(ctx):
+                _chain_delete_task(target_container, backup_name)
+        thread = threading.Thread(target=runner, daemon=True)
+        _chain_job_set_thread(thread)
+        thread.start()
     return True, "Chain backup deletion started"
 
 
-def cancel_chain_job(container_name: str = ""):
-    with _chain_job_lock:
-        if not _chain_job_state.get("active"):
-            return False, "No chain data operation in progress"
-        if _chain_job_cancel_event.is_set():
-            return False, "Cancellation already requested"
-        details = _chain_job_state.get("details") or {}
-        job_container = (details.get("container") or "").strip()
-        if container_name and job_container and container_name != job_container:
-            # Only log discrepancy; still allow cancel since only one job can run at a time
-            app.logger.debug(
-                "Cancelling chain job for container %s (requested container %s)",
-                job_container,
-                container_name,
-            )
-        _chain_job_cancel_event.set()
-        _chain_job_state["status"] = "cancelling"
-        _chain_job_state["message"] = "Canceling chain backup operation…"
-        merged_details = dict(details)
-        merged_details["cancel_requested"] = True
-        _chain_job_state["details"] = merged_details
+def cancel_chain_job(ctx: NodeContext, container_name: str = ""):
+    target_container = container_name or ctx.container
+    with use_node_context(ctx):
+        with _chain_job_lock:
+            if not _chain_job_state.get("active"):
+                return False, "No chain data operation in progress"
+            if _chain_job_cancel_event.is_set():
+                return False, "Cancellation already requested"
+            details = _chain_job_state.get("details") or {}
+            job_container = (details.get("container") or "").strip()
+            if target_container and job_container and target_container != job_container:
+                try:
+                    app.logger.debug(
+                        "Cancelling chain job for container %s (requested container %s)",
+                        job_container,
+                        target_container,
+                    )
+                except Exception:
+                    pass
+            _chain_job_cancel_event.set()
+            _chain_job_state["status"] = "cancelling"
+            _chain_job_state["message"] = "Canceling chain backup operation…"
+            merged_details = dict(details)
+            merged_details["cancel_requested"] = True
+            _chain_job_state["details"] = merged_details
     return True, "Chain operation cancellation requested"
 
 @app.route("/api/containers")
 def api_containers():
+    ctx = resolve_node_from_request()
     docker_enabled = ENABLE_CONTROL and bool(ALLOW_DOCKER)
     host_mode = ENABLE_CONTROL and not ALLOW_DOCKER
-    return jsonify({
+    containers = docker_list() if ALLOW_DOCKER else []
+    response = {
         "enabled": docker_enabled,
         "chain_enabled": ENABLE_CONTROL,
         "host_mode": host_mode,
-        "containers": docker_list() if ALLOW_DOCKER else [],
-    })
+        "containers": containers,
+        "nodes": [node.as_metadata() for node in NODES.values()],
+        "active_node": ctx.id,
+        "default_container": ctx.container,
+    }
+    return jsonify(response)
 
 
 @app.route("/api/chain/backups")
 def api_chain_backups():
-    return jsonify({
-        "backups": list_chain_backups(),
-        "job": _chain_job_snapshot(),
-    })
+    ctx = resolve_node_from_request()
+    with use_node_context(ctx):
+        payload = {
+            "backups": list_chain_backups(),
+            "job": _chain_job_snapshot(),
+            "node": ctx.id,
+        }
+    return jsonify(payload)
 
 @app.route("/api/control", methods=["POST"])
 def api_control():
     if not ENABLE_CONTROL:
-        return jsonify({"ok":False, "error":"controls disabled"}), 403
+        return jsonify({"ok": False, "error": "controls disabled"}), 403
     body = request.get_json(silent=True) or {}
     action = (body.get("action") or "").lower()
-    name = body.get("container") or body.get("name") or ""
-    if action in ("docker_start","docker_stop","docker_restart"):
-        mapping = {"docker_start":"start","docker_stop":"stop","docker_restart":"restart"}
-        return jsonify(docker_action(name, mapping[action]))
-    elif action == "auto_restart_enable":
-        if not name:
+    ctx = resolve_node_from_request()
+    name = (body.get("container") or body.get("name") or ctx.container or "").strip()
+
+    if action in ("docker_start", "docker_stop", "docker_restart"):
+        mapping = {"docker_start": "start", "docker_stop": "stop", "docker_restart": "restart"}
+        container_name = name or ctx.container
+        result = docker_action(container_name, mapping[action])
+        result["node"] = ctx.id
+        result.setdefault("message", result.get("output"))
+        return jsonify(result)
+
+    if action == "auto_restart_enable":
+        container_name = name or ctx.container
+        if not container_name:
             return jsonify({"ok": False, "error": "missing container name"}), 400
         if not SYSTEMCTL_BIN:
             return jsonify({"ok": False, "error": "systemctl not available on host"}), 400
@@ -1841,79 +2546,108 @@ def api_control():
         if hours <= 0:
             return jsonify({"ok": False, "error": "auto restart hours must be positive"}), 400
         try:
-            output = _enable_auto_restart(name, hours)
+            with use_node_context(ctx):
+                output = _enable_auto_restart(container_name, hours)
         except Exception as exc:
-            return jsonify({"ok": False, "error": str(exc)}), 400
+            return jsonify({"ok": False, "error": str(exc), "node": ctx.id}), 400
         message = output or f"Auto restart configured every {_format_hours_interval(hours)}"
-        return jsonify({"ok": True, "message": message})
-    elif action == "auto_restart_disable":
-        if not name:
+        return jsonify({"ok": True, "message": message, "node": ctx.id})
+
+    if action == "auto_restart_disable":
+        container_name = name or ctx.container
+        if not container_name:
             return jsonify({"ok": False, "error": "missing container name"}), 400
         if not SYSTEMCTL_BIN:
             return jsonify({"ok": False, "error": "systemctl not available on host"}), 400
         try:
-            _disable_auto_restart(name)
+            with use_node_context(ctx):
+                _disable_auto_restart(container_name)
         except Exception as exc:
-            return jsonify({"ok": False, "error": str(exc)}), 400
-        return jsonify({"ok": True, "message": "Auto restart disabled"})
-    elif action == "chain_backup":
-        ok, msg = trigger_chain_backup(name)
-        return (jsonify({"ok": ok, "message": msg}), 200 if ok else 400)
-    elif action == "chain_cancel":
-        ok, msg = cancel_chain_job(name)
-        return (jsonify({"ok": ok, "message": msg}), 200 if ok else 400)
-    elif action == "chain_restore":
+            return jsonify({"ok": False, "error": str(exc), "node": ctx.id}), 400
+        return jsonify({"ok": True, "message": "Auto restart disabled", "node": ctx.id})
+
+    if action == "chain_backup":
+        ok, msg = trigger_chain_backup(name, ctx)
+        status = 200 if ok else 400
+        return jsonify({"ok": ok, "message": msg, "node": ctx.id}), status
+
+    if action == "chain_cancel":
+        ok, msg = cancel_chain_job(ctx, name)
+        status = 200 if ok else 400
+        return jsonify({"ok": ok, "message": msg, "node": ctx.id}), status
+
+    if action == "chain_restore":
         backup_name = (body.get("backup") or "").strip()
         if not backup_name:
-            return jsonify({"ok": False, "error": "missing backup name"}), 400
-        ok, msg = trigger_chain_restore(name, backup_name)
-        return (jsonify({"ok": ok, "message": msg}), 200 if ok else 400)
-    elif action == "chain_delete":
+            return jsonify({"ok": False, "error": "missing backup name", "node": ctx.id}), 400
+        ok, msg = trigger_chain_restore(name, backup_name, ctx)
+        status = 200 if ok else 400
+        return jsonify({"ok": ok, "message": msg, "node": ctx.id}), status
+
+    if action == "chain_delete":
         backup_name = (body.get("backup") or "").strip()
         if not backup_name:
-            return jsonify({"ok": False, "error": "missing backup name"}), 400
-        ok, msg = trigger_chain_delete(name, backup_name)
-        return (jsonify({"ok": ok, "message": msg}), 200 if ok else 400)
-    elif action == "sample_now":
-        ok, ht, *_ = sample_once()
-        return jsonify({"ok": ok, "health_text": ht})
-    elif action == "clear_totals":
-        with lock:
-            activity_labels.clear()
-            activity_mined.clear()
-            activity_processed.clear()
-            activity_sealed.clear()
-            totals = _activity_totals_state()
-            totals["mined"] = 0.0
-            totals["processed"] = 0.0
-            totals["sealed"] = 0.0
-            globals()["_ACTIVITY_TOTALS_LAST_TS"] = None
-        ensure_activity_defaults()
-        return jsonify({"ok": True})
-    elif action == "set_window":
-        minutes = int(body.get("minutes", 20))
-        new_points = _set_window_minutes(minutes)
-        return jsonify({"ok": True, "minutes": minutes, "points": new_points, "sample_sec": SAMPLE_SEC})
-    elif action == "set_points":
-        points = int(body.get("points", WINDOW))
-        new_points = _apply_window_points(points)
-        return jsonify({"ok": True, "points": new_points, "sample_sec": SAMPLE_SEC})
-    else:
-        return jsonify({"ok":False, "error":"unknown action"}), 400
+            return jsonify({"ok": False, "error": "missing backup name", "node": ctx.id}), 400
+        ok, msg = trigger_chain_delete(name, backup_name, ctx)
+        status = 200 if ok else 400
+        return jsonify({"ok": ok, "message": msg, "node": ctx.id}), status
+
+    if action == "sample_now":
+        with use_node_context(ctx):
+            ok, ht, *_ = sample_once()
+        return jsonify({"ok": ok, "health_text": ht, "node": ctx.id})
+
+    if action == "clear_totals":
+        with use_node_context(ctx):
+            with lock:
+                activity_labels.clear()
+                activity_mined.clear()
+                activity_processed.clear()
+                activity_sealed.clear()
+                totals = _activity_totals_state()
+                totals["mined"] = 0.0
+                totals["processed"] = 0.0
+                totals["sealed"] = 0.0
+                globals()["_ACTIVITY_TOTALS_LAST_TS"] = None
+            ensure_activity_defaults()
+        return jsonify({"ok": True, "node": ctx.id})
+
+    if action == "set_window":
+        try:
+            minutes = int(body.get("minutes", 20))
+        except Exception:
+            return jsonify({"ok": False, "error": "invalid minutes", "node": ctx.id}), 400
+        with use_node_context(ctx):
+            new_points = _set_window_minutes(minutes)
+        return jsonify({"ok": True, "minutes": minutes, "points": new_points, "sample_sec": SAMPLE_SEC, "node": ctx.id})
+
+    if action == "set_points":
+        try:
+            points = int(body.get("points", WINDOW))
+        except Exception:
+            return jsonify({"ok": False, "error": "invalid points", "node": ctx.id}), 400
+        with use_node_context(ctx):
+            new_points = _apply_window_points(points)
+        return jsonify({"ok": True, "points": new_points, "sample_sec": SAMPLE_SEC, "node": ctx.id})
+
+    return jsonify({"ok": False, "error": "unknown action", "node": ctx.id}), 400
 
 @app.route("/api/logs/recent")
 def api_logs_recent():
+    ctx = resolve_node_from_request()
     limit_param = request.args.get("limit", "50")
     try:
         limit_int = int(limit_param)
     except Exception:
         limit_int = 50
-    lines = _get_recent_logs(limit_int)
+    with use_node_context(ctx):
+        lines = _get_recent_logs(limit_int, ctx.container)
     return jsonify({
         "lines": lines,
         "limit": max(1, min(int(limit_int), 200)),
         "count": len(lines),
         "generated_ts": int(time.time() * 1000),
+        "node": ctx.id,
     })
 
 @app.route("/healthz")
@@ -1942,32 +2676,40 @@ def _sample_once():
 
 @app.route('/api/chart/config',methods=['GET','POST'])
 def api_chart_config():
+    ctx = resolve_node_from_request()
     if request.method == 'GET':
-        return jsonify({'ok': True, **CHART_CONFIG})
+        payload = dict(CHART_CONFIG)
+        payload.update({'ok': True, 'node': ctx.id})
+        return jsonify(payload)
     data = request.get_json(silent=True) or {}
-    if 'timeframe_sec' in data:
-        try:
-            CHART_CONFIG['timeframe_sec'] = int(data['timeframe_sec'])
-        except Exception:
-            pass
-    if 'history_len' in data:
-        try:
-            pts = _set_history_points(int(data['history_len']))
-            CHART_CONFIG['history_len'] = pts
-        except Exception:
-            pass
-    return jsonify({'ok': True, **CHART_CONFIG})
+    with use_node_context(ctx):
+        if 'timeframe_sec' in data:
+            try:
+                CHART_CONFIG['timeframe_sec'] = int(data['timeframe_sec'])
+            except Exception:
+                pass
+        if 'history_len' in data:
+            try:
+                pts = _set_history_points(int(data['history_len']))
+                CHART_CONFIG['history_len'] = pts
+            except Exception:
+                pass
+    payload = dict(CHART_CONFIG)
+    payload.update({'ok': True, 'node': ctx.id})
+    return jsonify(payload)
 
 @app.route('/api/chart/reset',methods=['POST'])
 def api_chart_reset():
+    ctx = resolve_node_from_request()
     d=request.get_json(silent=True)or{}
     what=d.get('what','all')
-    bufs=globals().get('CHART_BUFFERS',{})
-    def clr(k):
-        b=bufs.get(k)
-        if b and hasattr(b,'clear'):b.clear()
-    [clr(k)for k in (bufs.keys()if what=='all'else[what])]
-    return jsonify({'ok':True,'cleared':what})
+    with use_node_context(ctx):
+        bufs=globals().get('CHART_BUFFERS',{})
+        def clr(k):
+            b=bufs.get(k)
+            if b and hasattr(b,'clear'):b.clear()
+        [clr(k)for k in (bufs.keys()if what=='all'else[what])]
+    return jsonify({'ok':True,'cleared':what,'node': ctx.id})
 
 def _sampler_loop():
     import time, logging
@@ -2150,16 +2892,18 @@ def peers_or_fb(peers):
         pass
     return p
 
-_RECENT_LOGS_CACHE = {"ts": 0, "limit": 0, "lines": []}
+_RECENT_LOGS_CACHE = {}
 
-def _get_recent_logs(limit=50):
+def _get_recent_logs(limit=50, container=None):
     try:
         limit_int = max(1, min(int(limit), 200))
     except Exception:
         limit_int = 50
+    container_name = container or DEFAULT_NODE.container
+    cache_key = (container_name or "__host__", limit_int)
     now = time.time()
-    cache = _RECENT_LOGS_CACHE
-    if cache["lines"] and cache["limit"] == limit_int and (now - cache["ts"]) < 2:
+    cache = _RECENT_LOGS_CACHE.setdefault(cache_key, {"ts": 0, "lines": []})
+    if cache["lines"] and (now - cache["ts"]) < 2:
         return list(cache["lines"])
     lines = []
     try:
@@ -2168,8 +2912,10 @@ def _get_recent_logs(limit=50):
     except Exception:
         ansi_re = None
     try:
+        if not container_name:
+            raise RuntimeError("container name required for logs")
         out = subprocess.check_output(
-            ["docker", "logs", "--tail", str(limit_int), "--timestamps", "blockdag-testnet-network"],
+            ["docker", "logs", "--tail", str(limit_int), "--timestamps", container_name],
             stderr=subprocess.STDOUT,
             text=True,
             timeout=4,
@@ -2181,7 +2927,7 @@ def _get_recent_logs(limit=50):
             lines = raw
     except Exception:
         pass
-    cache.update({"ts": now, "limit": limit_int, "lines": lines})
+    cache.update({"ts": now, "lines": lines})
     return list(lines)
 
 # ---- BEGIN: /api/status height fixer hook ----
@@ -2373,181 +3119,7 @@ try:
 except Exception:
     pass
 
-# === AUTO_CHART_BUFFER_BEGIN ===
-# Lightweight, safe server-side chart buffer that:
-# - Captures each /api/status response into in-memory deques
-# - Serves /api/history for chart warm-start
-# - Computes height delta/second
-try:
-    import os, json, time
-    from collections import deque
-    from threading import Lock
-    from flask import request, jsonify, Response
-    _HIST_CAP = int(os.getenv("BDAG_HISTORY_CAP", "720"))  # ~24 min @ 2s
-    _hist_lock = Lock()
-    _hist = {
-        "height_local": deque(maxlen=_HIST_CAP),
-        "height_remote": deque(maxlen=_HIST_CAP),
-        "peers":    deque(maxlen=_HIST_CAP),
-        "latency":  deque(maxlen=_HIST_CAP),
-        "mined":    deque(maxlen=_HIST_CAP),
-        "processed":deque(maxlen=_HIST_CAP),
-        "sealed":   deque(maxlen=_HIST_CAP),
-        "activity": deque(maxlen=_HIST_CAP),
-        "height_dx":deque(maxlen=_HIST_CAP),
-    }
-    _last_ht = {"t": None, "h": None}
 
-    def _extract(payload: dict):
-        a = payload.get("activity") or {}
-        height_raw = payload.get("height") or payload.get("chain_height") or payload.get("block_height") or 0
-        remote_raw = payload.get("height_remote") or payload.get("remote_height") or payload.get("heightRemote")
-        try:
-            if isinstance(height_raw, str) and height_raw.startswith("0x"):
-                height = float(int(height_raw, 16))
-            else:
-                height = float(height_raw or 0)
-        except Exception:
-            height = 0.0
-        remote = None
-        if remote_raw is not None:
-            try:
-                if isinstance(remote_raw, str) and remote_raw.startswith("0x"):
-                    remote = float(int(remote_raw, 16))
-                else:
-                    remote = float(remote_raw)
-            except Exception:
-                remote = None
-        peers   = float(payload.get("peers") or payload.get("peer_count") or 0)
-        latency = float(payload.get("rpc_latency_ms") or payload.get("latency_ms") or 0)
-        totals = a.get("totals") if isinstance(a.get("totals"), dict) else {}
-        def _pick_total(key):
-            if key in totals:
-                try:
-                    return float(totals.get(key) or 0)
-                except Exception:
-                    pass
-            v = a.get(key)
-            if isinstance(v, dict):
-                for candidate in ("total", "value", "count", "rate_per_s", "per_s_10s", "per_s_60s"):
-                    if candidate in v:
-                        try:
-                            value = v.get(candidate)
-                            if value is None:
-                                continue
-                            return float(value)
-                        except Exception:
-                            continue
-            try:
-                return float(v or 0)
-            except Exception:
-                return 0.0
-        mined     = _pick_total("mined")
-        processed = _pick_total("processed")
-        sealed    = _pick_total("sealed")
-        activity  = max(mined + processed + sealed, 0.0)
-        return height, remote, peers, latency, mined, processed, sealed, activity
-
-    def _push(ts_ms, height, remote, peers, latency, mined, processed, sealed, activity):
-        with _hist_lock:
-            dx = 0.0
-            if _last_ht["t"] is not None and _last_ht["h"] is not None:
-                dt = (ts_ms - _last_ht["t"]) / 1000.0
-                if dt > 0:
-                    dx = max((height - _last_ht["h"]) / dt, 0.0)
-            _last_ht["t"] = ts_ms
-            _last_ht["h"] = height
-            _hist["height_local"].append((ts_ms, height))
-            _hist["height_remote"].append((ts_ms, remote))
-            _hist["peers"].append((ts_ms, peers))
-            _hist["latency"].append((ts_ms, latency))
-            _hist["mined"].append((ts_ms, mined))
-            _hist["processed"].append((ts_ms, processed))
-            _hist["sealed"].append((ts_ms, sealed))
-            _hist["activity"].append((ts_ms, activity))
-            _hist["height_dx"].append((ts_ms, dx))
-
-    # Wrap only /api/status to capture responses (no changes to your handler)
-    try:
-        _status_view = (app.view_functions.get('api_status')
-                        or app.view_functions.get('status')
-                        or app.view_functions.get('api.status'))
-        if _status_view:
-            def _wrap(view):
-                def _inner(*a, **kw):
-                    out = view(*a, **kw)
-                    try:
-                        # Normalize to Response so we can read body
-                        if isinstance(out, Response):
-                            resp = out
-                        elif isinstance(out, tuple):
-                            resp = out[0] if isinstance(out[0], Response) else Response(out[0])
-                        elif isinstance(out, (dict, list)):
-                            resp = jsonify(out)
-                        else:
-                            resp = Response(out)
-
-                        if request.path == "/api/status":
-                            body = resp.get_data(as_text=True)
-                            if body:
-                                payload = json.loads(body)
-                                fixer = globals().get("_apply_sidecar_fixes_to_status_dict")
-                                if callable(fixer):
-                                    try:
-                                        payload = fixer(payload)
-                                    except Exception:
-                                        pass
-                                merger = globals().get("_merge_activity")
-                                if callable(merger):
-                                    try:
-                                        payload = merger(payload)
-                                    except Exception:
-                                        pass
-                                ts_ms = int(time.time() * 1000)
-                                h,r,p,l,m,pr,s,a = _extract(payload)
-                                _push(ts_ms, h,r,p,l,m,pr,s,a)
-
-                        # hard no-cache on /api/status responses
-                        if request.path == "/api/status":
-                            resp.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
-                            resp.headers['Pragma'] = 'no-cache'
-                            resp.headers['Expires'] = '0'
-                        return resp
-                    except Exception:
-                        return out
-                _inner.__name__ = view.__name__
-                return _inner
-            app.view_functions[_status_view.__name__] = _wrap(_status_view)
-    except Exception:
-        pass
-
-    @app.route("/api/history")
-    def api_history():
-        try:
-            payload = _history_payload()
-        except Exception:
-            payload = {}
-        if any((payload.get(k) or {}).get("labels") for k in ("height_local","height_remote","peers","latency","activity","mined","processed","sealed","height_dx")):
-            return jsonify(payload)
-        with _hist_lock:
-            def pack(key):
-                arr = list(_hist[key])
-                return {"labels":[t for (t,_) in arr], "series":[v for (_,v) in arr]}
-            return jsonify({
-                "height_local": pack("height_local"),
-                "height_remote": pack("height_remote"),
-                "peers":    pack("peers"),
-                "latency":  pack("latency"),
-                "mined":    pack("mined"),
-                "processed":pack("processed"),
-                "sealed":   pack("sealed"),
-                "activity": pack("activity"),
-                "height_dx":pack("height_dx"),
-            })
-except Exception:
-    # Defensive: never break the app if imports fail
-    pass
-# === AUTO_CHART_BUFFER_END ===
 try:
     from flask import render_template
 except Exception:
