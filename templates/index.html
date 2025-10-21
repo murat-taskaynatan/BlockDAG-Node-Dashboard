@@ -1031,8 +1031,14 @@ async function performNodeAction(action){
   }
   const hoursInput = document.getElementById('autoRestartHours');
   const backupSelect = document.getElementById('chainBackupSelect');
+  const actionLabels = {
+    restart: 'Restarting',
+    start: 'Starting',
+    stop: 'Stopping',
+  };
+  let baseLabel = actionLabels[action] || (action.charAt(0).toUpperCase() + action.slice(1));
+  let statusMessage = container ? `${baseLabel} ${container}` : baseLabel;
   let successLabel = action.charAt(0).toUpperCase() + action.slice(1);
-  let statusMessage = container ? `${successLabel} ${container}` : successLabel;
   const payload = { action: ACTION_MAP[action], container };
   if (action === 'auto_enable'){
     const hoursVal = Number(hoursInput ? hoursInput.value : AUTO_RESTART_DEFAULT_HOURS);
@@ -1094,7 +1100,7 @@ async function performNodeAction(action){
     if (!res.ok || !data || data.ok === false){
       throw new Error((data && data.error) || `Action failed (${res.status})`);
     }
-    finalMessage = (data.output || data.message || `${successLabel} succeeded`).trim();
+    finalMessage = (data.message || data.output || `${successLabel} succeeded`).trim();
     const lowerMessage = finalMessage.toLowerCase();
     if (action === 'auto_enable' && lowerMessage.includes('setup complete')){
       const setupLine = finalMessage.split('\n').find(line => line.toLowerCase().includes('setup complete'));
