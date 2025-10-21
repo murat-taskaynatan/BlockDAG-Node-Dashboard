@@ -41,19 +41,7 @@ SYNC_RATE_THRESHOLD = float(os.getenv("DASH_SYNC_RATE_THRESHOLD", "0.3"))
 DOWNLOAD_RATE_THRESHOLD = float(os.getenv("DASH_DOWNLOAD_RATE_THRESHOLD", "1.0"))
 MINING_RATE_THRESHOLD = float(os.getenv("DASH_MINING_RATE_THRESHOLD", "0.1"))
 APP_VERSION = os.getenv("BDAG_DASH_VERSION", "v1.4.0-beta").strip() or "v1.4.0-beta"
-def _version_display(version: str) -> str:
-    raw = version.strip()
-    if not raw:
-        return ""
-    base = raw[1:] if raw.startswith("v") else raw
-    parts = base.split("-", 1)
-    core = parts[0]
-    if len(parts) == 1:
-        return core
-    suffix = parts[1].lower()
-    return f"{core} {suffix}"
-
-APP_VERSION_DISPLAY = _version_display(APP_VERSION).strip() or APP_VERSION
+APP_VERSION_DISPLAY = APP_VERSION
 HEIGHT_JUMP_THRESHOLD = int(os.getenv("DASH_HEIGHT_JUMP_THRESHOLD", "500"))
 ACTIVITY_JUMP_THRESHOLD = float(os.getenv("DASH_ACTIVITY_JUMP_THRESHOLD", "500"))
 ACTIVITY_RATE_MAX = float(os.getenv("DASH_ACTIVITY_RATE_MAX", "200"))
