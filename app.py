@@ -152,6 +152,7 @@ _DEFAULT_CHAIN_DATA_PATH = _expand_path(DEFAULT_NODE_SETTINGS["chain_data_dir"],
 SHARED_CHAIN_BACKUP_DIR = _expand_path(DEFAULT_NODE_SETTINGS["chain_backup_dir"], CONFIG_BASE_DIR) or Path(DEFAULT_NODE_SETTINGS["chain_backup_dir"]).expanduser().resolve()
 
 _context_swap_lock = threading.RLock()
+_AUTO_NODE_LOCK = threading.Lock()
 
 
 class NodeContext:
@@ -282,6 +283,216 @@ class NodeContext:
         }
 
 
+def _slugify(value: str) -> str:
+    text = (value or "").strip().lower()
+    text = re.sub(r"[^a-z0-9]+", "-", text)
+    text = text.strip("-")
+    return text or "node"
+
+
+def _parse_docker_env(env_list):
+    env = {}
+    for item in env_list or []:
+        if not item or "=" not in item:
+            continue
+        key, val = item.split("=", 1)
+        env[key] = val
+    return env
+
+
+_NODE_ARGS_HTTP_ADDR = re.compile(r"--http\.addr=([^\s]+)")
+_NODE_ARGS_HTTP_PORT = re.compile(r"--http\.port=([^\s]+)")
+
+
+def _extract_node_args(node_args: str) -> tuple[str, str]:
+    host = "127.0.0.1"
+    port = "18545"
+    if not node_args:
+        return host, port
+    match = _NODE_ARGS_HTTP_ADDR.search(node_args)
+    if match:
+        candidate = match.group(1).strip()
+        if candidate:
+            host = candidate
+    match = _NODE_ARGS_HTTP_PORT.search(node_args)
+    if match:
+        candidate = match.group(1).strip()
+        if candidate.isdigit():
+            port = candidate
+    if host in {"0.0.0.0", "*", "[::]"}:
+        host = "127.0.0.1"
+    return host, port
+
+
+def _discover_docker_nodes():
+    try:
+        result = subprocess.run(
+            ["docker", "ps", "--format", "{{.Names}}"],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+    except (FileNotFoundError, subprocess.CalledProcessError):
+        return []
+
+    entries = []
+    for line in result.stdout.splitlines():
+        name = line.strip()
+        if not name:
+            continue
+        try:
+            inspect = subprocess.run(
+                ["docker", "inspect", name],
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+        except subprocess.CalledProcessError:
+            continue
+        try:
+            info = json.loads(inspect.stdout)[0]
+        except Exception:
+            continue
+
+        env = _parse_docker_env(info.get("Config", {}).get("Env"))
+        node_args = env.get("NODE_ARGS", "")
+        host, port = _extract_node_args(node_args)
+        rpc_base = f"http://{host}:{port}"
+
+        data_dir = None
+        for mount in info.get("Mounts", []):
+            dest = (mount.get("Destination") or "").rstrip("/")
+            if dest in {"/bdag/data", "/opt/bdag/data"}:
+                data_dir = mount.get("Source")
+                break
+        if not data_dir:
+            continue
+
+        labels = info.get("Config", {}).get("Labels") or {}
+        label = labels.get("com.docker.compose.service") or info.get("Name", "").lstrip("/") or name
+
+        entries.append({
+            "id": _slugify(name),
+            "label": label,
+            "container": name,
+            "rpc_base": rpc_base,
+            "chain_data_dir": data_dir,
+            "chain_backup_dir": str(SHARED_CHAIN_BACKUP_DIR),
+        })
+    return entries
+
+
+def _augment_nodes_with_docker(nodes: "OrderedDict[str, NodeContext]"):
+    discovered = []
+    existing_ids = set(nodes.keys())
+    existing_containers = {ctx.container for ctx in nodes.values() if ctx.container}
+    for meta in _discover_docker_nodes():
+        container = meta.get("container")
+        if container and container in existing_containers:
+            continue
+        base_id = meta.get("id") or _slugify(container)
+        candidate = base_id
+        suffix = 2
+        while candidate in existing_ids:
+            candidate = f"{base_id}-{suffix}"
+            suffix += 1
+        meta["id"] = candidate
+        try:
+            ctx = NodeContext(meta)
+        except Exception as exc:
+            try:
+                app.logger.warning("Skipping auto-detected node %s: %s", container, exc)
+            except Exception:
+                pass
+            continue
+        nodes[ctx.id] = ctx
+        existing_ids.add(ctx.id)
+        if ctx.container:
+            existing_containers.add(ctx.container)
+        discovered.append(ctx.id)
+        try:
+            app.logger.info("Auto-detected node %s (container %s)", ctx.id, ctx.container)
+        except Exception:
+            pass
+    return discovered
+
+
+def _bind_default_node_globals():
+    global RPC_BASE, RPC_USER, RPC_PASS, REMOTE_RPC_BASE, REMOTE_RPC_METHOD
+    global REMOTE_RPC_TIMEOUT, REMOTE_RPC_CACHE_SEC, REMOTE_RPC_VERIFY
+    global MINING_STATE_SYNC_CONTAINER, CHAIN_DATA_DIR, CHAIN_BACKUP_DIR
+    global CHAIN_BACKUP_PREFIX, CHAIN_BACKUP_SUFFIX, CHAIN_BACKUP_MAX
+    global lock, history_lock, height_series, remote_height_series
+    global peers_series, lat_series, activity_labels, activity_mined
+    global activity_processed, activity_sealed
+
+    RPC_BASE = DEFAULT_NODE.rpc_base
+    RPC_USER = DEFAULT_NODE.rpc_user
+    RPC_PASS = DEFAULT_NODE.rpc_pass
+    REMOTE_RPC_BASE = DEFAULT_NODE.remote_rpc_base
+    REMOTE_RPC_METHOD = DEFAULT_NODE.remote_rpc_method
+    REMOTE_RPC_TIMEOUT = DEFAULT_NODE.remote_rpc_timeout
+    REMOTE_RPC_CACHE_SEC = DEFAULT_NODE.remote_rpc_cache_sec
+    REMOTE_RPC_VERIFY = DEFAULT_NODE.remote_rpc_verify
+    MINING_STATE_SYNC_CONTAINER = DEFAULT_NODE.container or MINING_STATE_SYNC_CONTAINER
+    CHAIN_DATA_DIR = DEFAULT_NODE.chain_data_dir
+    CHAIN_BACKUP_DIR = DEFAULT_NODE.chain_backup_dir
+    CHAIN_BACKUP_PREFIX = DEFAULT_NODE.chain_backup_prefix
+    CHAIN_BACKUP_SUFFIX = DEFAULT_NODE.chain_backup_suffix
+    CHAIN_BACKUP_MAX = DEFAULT_NODE.chain_backup_max
+
+    lock = DEFAULT_NODE.lock
+    history_lock = DEFAULT_NODE.history_lock
+    height_series = DEFAULT_NODE.height_series
+    remote_height_series = DEFAULT_NODE.remote_height_series
+    peers_series = DEFAULT_NODE.peers_series
+    lat_series = DEFAULT_NODE.lat_series
+    activity_labels = DEFAULT_NODE.activity_labels
+    activity_mined = DEFAULT_NODE.activity_mined
+    activity_processed = DEFAULT_NODE.activity_processed
+    activity_sealed = DEFAULT_NODE.activity_sealed
+
+    globals()["_ACTIVITY_TOTALS"] = DEFAULT_NODE.activity_totals
+    globals()["_ACTIVITY_TOTALS_LAST_TS"] = DEFAULT_NODE.activity_totals_last_ts
+    globals()["_NODE_STATE_CACHE"] = DEFAULT_NODE.node_state_cache
+    globals()["_NODE_STATE_DATA"] = DEFAULT_NODE.node_state_data
+    globals()["_NODE_UPTIME_CACHE"] = DEFAULT_NODE.node_uptime_cache
+    globals()["_REMOTE_HEIGHT_CACHE"] = DEFAULT_NODE.remote_height_cache
+    globals()["_MINING_STATE_SYNC_CACHE"] = DEFAULT_NODE.mining_state_sync_cache
+    globals()["_history_series"] = DEFAULT_NODE.history_series
+    globals()["_history_state"] = DEFAULT_NODE.history_state
+    globals()["_chain_job_lock"] = DEFAULT_NODE.chain_job_lock
+    globals()["_chain_job_state"] = DEFAULT_NODE.chain_job_state
+    globals()["_chain_job_context"] = DEFAULT_NODE.chain_job_context
+    globals()["_chain_job_cancel_event"] = DEFAULT_NODE.chain_job_cancel_event
+    globals()["_last_sample_meta"] = DEFAULT_NODE.last_sample_meta
+    globals()["_CHART_SAMPLER_STARTED"] = DEFAULT_NODE.chart_sampler_started
+    globals()["_height_zero_streak"] = getattr(DEFAULT_NODE, "height_zero_streak", 0)
+    globals()["_peers_zero_streak"] = getattr(DEFAULT_NODE, "peers_zero_streak", 0)
+    globals()["_last_good_height"] = getattr(DEFAULT_NODE, "last_good_height", 0)
+    globals()["_last_good_remote_height"] = getattr(DEFAULT_NODE, "last_good_remote_height", 0)
+    globals()["_last_activity_totals"] = getattr(DEFAULT_NODE, "last_activity_totals", {"mined": 0.0, "processed": 0.0, "sealed": 0.0})
+
+
+def _rebuild_node_mappings():
+    global NODE_BY_CONTAINER, MULTI_NODE_ENABLED, DEFAULT_NODE_ID, DEFAULT_NODE
+    NODE_BY_CONTAINER = {ctx.container: ctx for ctx in NODES.values() if ctx.container}
+    MULTI_NODE_ENABLED = len(NODES) > 1
+    if DEFAULT_NODE_ID not in NODES and NODES:
+        DEFAULT_NODE_ID = next(iter(NODES))
+    if DEFAULT_NODE_ID in NODES:
+        DEFAULT_NODE = NODES[DEFAULT_NODE_ID]
+        _bind_default_node_globals()
+
+
+def refresh_discovered_nodes():
+    with _AUTO_NODE_LOCK:
+        added = _augment_nodes_with_docker(NODES)
+        if added:
+            _rebuild_node_mappings()
+    return added
+
+
 def _load_node_configs():
     nodes = OrderedDict()
     raw = []
@@ -314,6 +525,8 @@ def _load_node_configs():
 
 
 NODES = _load_node_configs()
+with _AUTO_NODE_LOCK:
+    _augment_nodes_with_docker(NODES)
 if not NODES:
     raise RuntimeError("No node configurations available")
 
@@ -323,6 +536,7 @@ if _default_id in NODES:
 else:
     DEFAULT_NODE_ID = next(iter(NODES))
 DEFAULT_NODE = NODES[DEFAULT_NODE_ID]
+_bind_default_node_globals()
 NODE_BY_CONTAINER = {ctx.container: ctx for ctx in NODES.values() if ctx.container}
 MULTI_NODE_ENABLED = len(NODES) > 1
 
@@ -2635,6 +2849,12 @@ def api_containers():
         "default_container": ctx.container,
     }
     return jsonify(response)
+
+
+@app.route("/api/nodes/refresh", methods=["POST"])
+def api_nodes_refresh():
+    added = refresh_discovered_nodes()
+    return jsonify({"ok": True, "added": added, "count": len(NODES)})
 
 
 @app.route("/api/chain/backups")
