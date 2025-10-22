@@ -42,6 +42,9 @@
   width:110px !important;
   flex:0 0 110px !important;
 }
+.node-ctrls__actions--auto{margin-left:20px;display:flex;align-items:flex-end}
+.node-ctrls__field--auto{flex-direction:row;align-items:center;gap:12px;margin:0}
+.node-ctrls__field--auto span{margin:0}
 .node-ctrls__actions--auto .btn{
   min-width:140px;
   width:140px !important;
@@ -68,7 +71,7 @@
 #nodeControlsCard .node-ctrls__row{width:100%;display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap}
 #nodeControlsCard .node-ctrls__row--primary{gap:16px}
 #nodeControlsCard .node-ctrls__row--primary .node-ctrls__actions--container{flex:0 0 auto}
-#nodeControlsCard .node-ctrls__row--primary .node-ctrls__field--auto{flex:1 1 260px;min-width:200px}
+#nodeControlsCard .node-ctrls__row--primary .node-ctrls__field--auto{flex:1 1 260px;min-width:200px;margin-left:20px}
 #nodeControlsCard .node-ctrls__row--chain{margin-top:2px;display:flex;gap:12px;align-items:flex-end;flex-wrap:nowrap}
 #nodeControlsCard .node-ctrls__field--chain{display:flex;flex-direction:column;gap:4px;min-width:0;flex:1 1 460px;max-width:460px}
 #nodeControlsCard .node-ctrls__field--chain span{opacity:.7}
@@ -88,6 +91,9 @@
   #nodeControlsCard .node-ctrls__actions--chain{justify-content:flex-start;flex-wrap:wrap}
   #nodeControlsCard .node-ctrls__actions--chain .btn{flex:1 1 140px}
   #nodeControlsCard .node-ctrls__row--primary{gap:12px}
+  #nodeControlsCard .node-ctrls__row--primary .node-ctrls__field--auto{margin-left:0}
+  #nodeControlsCard .node-ctrls__actions--auto{margin-left:0}
+  #nodeControlsCard .node-ctrls__field--auto{flex-direction:column;align-items:flex-start;gap:4px;margin:0}
 }
 #nodeControlStatus{min-height:1.2em;opacity:0;transition:opacity .2s ease}
 #nodeContainerDetails{opacity:.8;text-align:right}
@@ -155,16 +161,16 @@
             <button class="btn btn--danger" data-node-action="stop" id="btnContainerStop" disabled>Stop</button>
             <button class="btn" data-node-action="restart" id="btnContainerRestart" disabled>Restart</button>
           </div>
-        <label class="node-ctrls__field node-ctrls__field--auto">
-          <span>Auto restart</span>
-          <div class="node-ctrls__actions node-ctrls__actions--auto">
+        <div class="node-ctrls__actions node-ctrls__actions--auto">
+          <label class="node-ctrls__field node-ctrls__field--auto">
+            <span>Auto restart</span>
             <div class="auto-hours">
               <input type="number" id="autoRestartHours" min="1" step="1" value="6">
               <span class="auto-hours__suffix">hrs</span>
               <button class="btn node-ctrls__btn node-ctrls__btn--auto-toggle" data-node-action="auto_toggle" id="btnAutoRestartToggle" disabled>Enable</button>
             </div>
-          </div>
-        </label>
+          </label>
+        </div>
         </div>
         <span class="node-ctrls__meta node-ctrls__meta--status" id="nodeControlStatus"></span>
         <span class="node-ctrls__meta" id="nodeContainerDetails"></span>
