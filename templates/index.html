@@ -42,9 +42,8 @@
   width:110px !important;
   flex:0 0 110px !important;
 }
-.node-ctrls__actions--auto{margin-left:20px;display:flex;align-items:flex-end}
-.node-ctrls__field--auto{flex-direction:row;align-items:center;gap:12px;margin:0}
-.node-ctrls__field--auto span{margin:0}
+.node-ctrls__actions--auto{margin-left:20px;display:flex;flex-direction:column;gap:4px;align-items:flex-start}
+.node-ctrls__label{font-size:11px;text-transform:uppercase;letter-spacing:.06em;opacity:.7}
 .node-ctrls__actions--auto .btn{
   min-width:140px;
   width:140px !important;
@@ -93,7 +92,10 @@
   #nodeControlsCard .node-ctrls__row--primary{gap:12px}
   #nodeControlsCard .node-ctrls__row--primary .node-ctrls__field--auto{margin-left:0}
   #nodeControlsCard .node-ctrls__actions--auto{margin-left:0}
+<<<<<<< HEAD
   #nodeControlsCard .node-ctrls__field--auto{flex-direction:column;align-items:flex-start;gap:4px;margin:0}
+=======
+>>>>>>> 46084d8 (style: offset auto-restart controls for clearer spacing)
 }
 #nodeControlStatus{min-height:1.2em;opacity:0;transition:opacity .2s ease}
 #nodeContainerDetails{opacity:.8;text-align:right}
@@ -162,14 +164,12 @@
             <button class="btn" data-node-action="restart" id="btnContainerRestart" disabled>Restart</button>
           </div>
         <div class="node-ctrls__actions node-ctrls__actions--auto">
-          <label class="node-ctrls__field node-ctrls__field--auto">
-            <span>Auto restart</span>
-            <div class="auto-hours">
-              <input type="number" id="autoRestartHours" min="1" step="1" value="6">
-              <span class="auto-hours__suffix">hrs</span>
-              <button class="btn node-ctrls__btn node-ctrls__btn--auto-toggle" data-node-action="auto_toggle" id="btnAutoRestartToggle" disabled>Enable</button>
-            </div>
-          </label>
+          <span class="node-ctrls__label">Auto restart</span>
+          <div class="auto-hours">
+            <input type="number" id="autoRestartHours" min="1" step="1" value="6">
+            <span class="auto-hours__suffix">hrs</span>
+            <button class="btn node-ctrls__btn node-ctrls__btn--auto-toggle" data-node-action="auto_toggle" id="btnAutoRestartToggle" disabled>Enable</button>
+          </div>
         </div>
         </div>
         <span class="node-ctrls__meta node-ctrls__meta--status" id="nodeControlStatus"></span>
