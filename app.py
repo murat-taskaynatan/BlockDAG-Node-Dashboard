@@ -230,6 +230,8 @@ class NodeContext:
         self.remote_height_cache = {"ts": 0.0, "height": None, "error": None}
         self.mining_state_sync_cache = {"ts": 0.0, "value": None, "error": None}
 
+        self.auto_discovered = False
+
         def _history_deque():
             return deque(maxlen=HISTORY_POINTS)
 
@@ -383,11 +385,14 @@ def _discover_docker_nodes():
 
 
 def _augment_nodes_with_docker(nodes: "OrderedDict[str, NodeContext]"):
-    discovered = []
+    added_ids = []
+    discovered_containers = []
     existing_ids = set(nodes.keys())
     existing_containers = {ctx.container for ctx in nodes.values() if ctx.container}
     for meta in _discover_docker_nodes():
         container = meta.get("container")
+        if container:
+            discovered_containers.append(container)
         if container and container in existing_containers:
             continue
         base_id = meta.get("id") or _slugify(container)
@@ -405,16 +410,48 @@ def _augment_nodes_with_docker(nodes: "OrderedDict[str, NodeContext]"):
             except Exception:
                 pass
             continue
+        try:
+            ctx.auto_discovered = True
+        except Exception:
+            pass
         nodes[ctx.id] = ctx
         existing_ids.add(ctx.id)
         if ctx.container:
             existing_containers.add(ctx.container)
-        discovered.append(ctx.id)
+        added_ids.append(ctx.id)
         try:
             app.logger.info("Auto-detected node %s (container %s)", ctx.id, ctx.container)
         except Exception:
             pass
-    return discovered
+    return added_ids, discovered_containers
+
+
+def _delete_node_state_record(node_id: str):
+    try:
+        path = _node_state_path(node_id)
+    except Exception:
+        path = None
+    if not path:
+        return
+    try:
+        path.unlink(missing_ok=True)
+    except Exception:
+        pass
+
+
+def _prune_missing_autonodes(active_containers):
+    removed = []
+    active_set = {c for c in (active_containers or []) if c}
+    for node_id, ctx in list(NODES.items()):
+        if not getattr(ctx, "auto_discovered", False):
+            continue
+        container = getattr(ctx, "container", None)
+        if container and container in active_set:
+            continue
+        removed.append(node_id)
+        NODES.pop(node_id, None)
+        _delete_node_state_record(node_id)
+    return removed
 
 
 def _bind_default_node_globals():
@@ -487,10 +524,11 @@ def _rebuild_node_mappings():
 
 def refresh_discovered_nodes():
     with _AUTO_NODE_LOCK:
-        added = _augment_nodes_with_docker(NODES)
-        if added:
+        added, discovered_containers = _augment_nodes_with_docker(NODES)
+        removed = _prune_missing_autonodes(discovered_containers)
+        if added or removed:
             _rebuild_node_mappings()
-    return added
+    return added, removed
 
 
 def _load_node_configs():
@@ -2838,6 +2876,13 @@ def api_containers():
     ctx = resolve_node_from_request()
     docker_enabled = ENABLE_CONTROL and bool(ALLOW_DOCKER)
     host_mode = ENABLE_CONTROL and not ALLOW_DOCKER
+    added = []
+    removed = []
+    if ALLOW_DOCKER:
+        try:
+            added, removed = refresh_discovered_nodes()
+        except Exception:
+            added, removed = [], []
     containers = docker_list() if ALLOW_DOCKER else []
     response = {
         "enabled": docker_enabled,
@@ -2847,14 +2892,16 @@ def api_containers():
         "nodes": [node.as_metadata() for node in NODES.values()],
         "active_node": ctx.id,
         "default_container": ctx.container,
+        "discovered": added,
+        "pruned": removed,
     }
     return jsonify(response)
 
 
 @app.route("/api/nodes/refresh", methods=["POST"])
 def api_nodes_refresh():
-    added = refresh_discovered_nodes()
-    return jsonify({"ok": True, "added": added, "count": len(NODES)})
+    added, removed = refresh_discovered_nodes()
+    return jsonify({"ok": True, "added": added, "removed": removed, "count": len(NODES)})
 
 
 @app.route("/api/chain/backups")

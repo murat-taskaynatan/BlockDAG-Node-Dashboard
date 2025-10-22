@@ -632,6 +632,10 @@ function updateLineChart(key, labels, rawData){
     charts[key] = mkLine(ctx, datasetLabel, data, labels);
   }else{
     const chart = charts[key];
+    if (chart._valueTag && chart._valueTag.isConnected){
+      chart._valueTag.remove();
+      chart._valueTag = null;
+    }
     chart.data.labels = labels;
     chart.data.datasets[0].data = data;
     chart.data.datasets[0].label = datasetLabel;
@@ -1504,6 +1508,10 @@ function updateHeightChart(labels, localSeries, remoteSeries){
   const localDelta = toDeltaSeries(localData);
   const remoteDelta = toDeltaSeries(remoteData);
   if (charts.height){
+    if (charts.height._valueTag && charts.height._valueTag.isConnected){
+      charts.height._valueTag.remove();
+      charts.height._valueTag = null;
+    }
     try{ charts.height.destroy(); }catch(_){}
     charts.height = null;
   }
