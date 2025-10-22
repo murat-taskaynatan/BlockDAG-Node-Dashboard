@@ -329,7 +329,7 @@ def _extract_node_args(node_args: str) -> tuple[str, str]:
 def _discover_docker_nodes():
     try:
         result = subprocess.run(
-            ["docker", "ps", "--format", "{{.Names}}"],
+            ["docker", "ps", "-a", "--format", "{{.Names}}"],
             capture_output=True,
             text=True,
             check=True,
