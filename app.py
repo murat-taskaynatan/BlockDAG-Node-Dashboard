@@ -439,13 +439,29 @@ def _delete_node_state_record(node_id: str):
         pass
 
 
+def _active_chain_job_containers():
+    containers = set()
+    with _chain_job_lock:
+        if not _chain_job_state.get("active"):
+            return containers
+        details = _chain_job_state.get("details") or {}
+        for key in ("container", "target_container", "job_container"):
+            value = (details.get(key) or "").strip()
+            if value:
+                containers.add(value)
+    return containers
+
+
 def _prune_missing_autonodes(active_containers):
     removed = []
     active_set = {c for c in (active_containers or []) if c}
+    job_containers = _active_chain_job_containers()
     for node_id, ctx in list(NODES.items()):
         if not getattr(ctx, "auto_discovered", False):
             continue
         container = getattr(ctx, "container", None)
+        if container and container in job_containers:
+            continue
         if container and container in active_set:
             continue
         removed.append(node_id)
