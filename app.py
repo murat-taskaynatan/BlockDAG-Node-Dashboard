@@ -1743,7 +1743,12 @@ def status():
         display_peers_val = sample_meta.get("peers_display")
         raw_height_val = sample_meta.get("height", h)
         raw_peers_val = sample_meta.get("peers", p)
-        local_height = int(display_height_val) if display_height_val is not None else int(raw_height_val) if raw_height_val is not None else 0
+        if isinstance(display_height_val, (int, float)) and display_height_val > 0:
+            local_height = int(display_height_val)
+        elif isinstance(raw_height_val, (int, float)) and raw_height_val > 0:
+            local_height = int(raw_height_val)
+        else:
+            local_height = 0
         remote_height_val = None
         if remote_h is not None:
             try:
