@@ -158,6 +158,9 @@
               <option value="">Loading…</option>
             </select>
           </label>
+          <div class="node-ctrls__actions node-ctrls__actions--discover">
+            <button class="btn" id="btnScanNodes" type="button" disabled>Scan Nodes</button>
+          </div>
           <div class="node-ctrls__actions node-ctrls__actions--container">
             <button class="btn" data-node-action="start" id="btnContainerStart" disabled>Start</button>
             <button class="btn btn--danger" data-node-action="stop" id="btnContainerStop" disabled>Stop</button>
@@ -1443,6 +1446,34 @@ function wireNodeControls(){
       const nodeId = nodeSelect.value || '';
       if (nodeId){
         setActiveNode(nodeId);
+      }
+    });
+  }
+  const scanNodesBtn = document.getElementById('btnScanNodes');
+  if (scanNodesBtn){
+    scanNodesBtn.disabled = false;
+    scanNodesBtn.addEventListener('click', async ev => {
+      ev.preventDefault();
+      const originalText = scanNodesBtn.textContent;
+      scanNodesBtn.disabled = true;
+      scanNodesBtn.textContent = 'Scanning…';
+      try{
+        const res = await fetch('/api/nodes/refresh', { method:'POST' });
+        const data = await res.json();
+        if (!res.ok || !data?.ok){
+          throw new Error(data?.error || `HTTP ${res.status}`);
+        }
+        const addedCount = Array.isArray(data.added) ? data.added.length : 0;
+        const removedCount = Array.isArray(data.removed) ? data.removed.length : 0;
+        await refreshNodeControls(true);
+        setNodeControlStatus(`Detected ${addedCount} container(s), removed ${removedCount}.`, true);
+      }catch(err){
+        console.warn('[node-controls] container scan failed', err);
+        const message = err && err.message ? err.message : String(err || 'Unknown error');
+        setNodeControlStatus(`Container scan failed: ${message}`, false);
+      }finally{
+        scanNodesBtn.disabled = false;
+        scanNodesBtn.textContent = originalText;
       }
     });
   }

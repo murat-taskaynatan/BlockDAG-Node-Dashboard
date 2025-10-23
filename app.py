@@ -2174,6 +2174,20 @@ def chart_latency():
     return jsonify(payload)
 
 
+@app.route("/api/nodes/refresh", methods=["POST"])
+def api_nodes_refresh():
+    try:
+        added, removed = refresh_discovered_nodes()
+        return jsonify({
+            "ok": True,
+            "added": list(added),
+            "removed": list(removed),
+            "count": len(NODES),
+        })
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+
 @app.route("/api/history")
 def api_history():
     ctx = resolve_node_from_request()
@@ -3051,12 +3065,6 @@ def api_containers():
         "pruned": removed,
     }
     return jsonify(response)
-
-
-@app.route("/api/nodes/refresh", methods=["POST"])
-def api_nodes_refresh():
-    added, removed = refresh_discovered_nodes()
-    return jsonify({"ok": True, "added": added, "removed": removed, "count": len(NODES)})
 
 
 @app.route("/api/chain/backups")
