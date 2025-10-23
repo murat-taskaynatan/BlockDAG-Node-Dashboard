@@ -52,7 +52,7 @@ remove_existing_install() {
     sudo systemctl disable "$SIDECAR_SERVICE" 2>/dev/null || true
   fi
   if sudo systemctl list-unit-files --type=timer --no-legend 2>/dev/null | grep -q "^$SIDECAR_TIMER"; then
-    sudo systemctl stop "$SIDECAR_TIMER" 2>/divnull || true
+    sudo systemctl stop "$SIDECAR_TIMER" 2>/dev/null || true
     sudo systemctl disable "$SIDECAR_TIMER" 2>/dev/null || true
   fi
 
