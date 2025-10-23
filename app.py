@@ -165,11 +165,18 @@ class NodeContext:
         self.id = str(merged.get("id") or "node").strip() or "node"
         self.label = str(merged.get("label") or self.id).strip() or self.id
         self.container = str(merged.get("container") or "").strip()
-        self.rpc_base = merged.get("rpc_base") or DEFAULT_NODE_SETTINGS["rpc_base"]
-        self.rpc_user = merged.get("rpc_user") or ""
-        self.rpc_pass = merged.get("rpc_pass") or ""
-        self.remote_rpc_base = merged.get("remote_rpc_base") or DEFAULT_NODE_SETTINGS["remote_rpc_base"]
-        self.remote_rpc_method = merged.get("remote_rpc_method") or DEFAULT_NODE_SETTINGS["remote_rpc_method"]
+
+        def _expand(value, default=""):
+            raw = _expand_env_placeholders(value)
+            if isinstance(raw, str):
+                raw = raw.strip()
+            return raw if raw else default
+
+        self.rpc_base = _expand(merged.get("rpc_base"), DEFAULT_NODE_SETTINGS["rpc_base"])
+        self.rpc_user = _expand(merged.get("rpc_user"), "")
+        self.rpc_pass = _expand(merged.get("rpc_pass"), "")
+        self.remote_rpc_base = _expand(merged.get("remote_rpc_base"), DEFAULT_NODE_SETTINGS["remote_rpc_base"])
+        self.remote_rpc_method = _expand(merged.get("remote_rpc_method"), DEFAULT_NODE_SETTINGS["remote_rpc_method"])
         self.remote_rpc_timeout = float(merged.get("remote_rpc_timeout", DEFAULT_NODE_SETTINGS["remote_rpc_timeout"]))
         self.remote_rpc_cache_sec = float(merged.get("remote_rpc_cache_sec", DEFAULT_NODE_SETTINGS["remote_rpc_cache_sec"]))
         self.remote_rpc_verify = _coerce_bool(merged.get("remote_rpc_verify", DEFAULT_NODE_SETTINGS["remote_rpc_verify"]))
