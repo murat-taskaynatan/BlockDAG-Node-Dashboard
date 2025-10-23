@@ -1958,17 +1958,6 @@ def _series_has_activity(series, threshold=1e-6):
             continue
     return False
 
-def _sync_series_clone(labels, sync_rate):
-    length = len(labels)
-    out = []
-    for idx in range(length):
-        try:
-            val = sync_rate[idx]
-        except Exception:
-            val = 0.0
-        out.append(max(_finite(val, 0.0), 0.0))
-    return out
-
 def _apply_window_points(points:int):
     """Adjust in-memory window length (number of points) for all series."""
     global WINDOW
@@ -2162,7 +2151,18 @@ def chart_activity():
     if labels:
         totals_raw = (hist_payload.get("activity") or {}).get("series") or []
         totals = [max(_finite(totals_raw[idx], 0.0), 0.0) if idx < len(totals_raw) else 0.0 for idx in range(len(labels))]
-        activity_rate = _rate_series_from(labels, totals)
+        mined_series = (hist_payload.get("mined") or {}).get("series") or []
+        processed_series = (hist_payload.get("processed") or {}).get("series") or []
+        sealed_series = (hist_payload.get("sealed") or {}).get("series") or []
+        mined_rate = _rate_series_from(labels, mined_series)
+        processed_rate = _rate_series_from(labels, processed_series)
+        sealed_rate = _rate_series_from(labels, sealed_series)
+        activity_rate = []
+        for idx in range(len(labels)):
+            m = mined_rate[idx] if idx < len(mined_rate) else 0.0
+            pr = processed_rate[idx] if idx < len(processed_rate) else 0.0
+            se = sealed_rate[idx] if idx < len(sealed_rate) else 0.0
+            activity_rate.append(max(_finite(m + pr + se, 0.0), 0.0))
         sync_raw = (hist_payload.get("height_dx") or {}).get("series") or []
         if sync_raw:
             sync_rate = [max(_finite(sync_raw[idx], 0.0), 0.0) if idx < len(sync_raw) else 0.0 for idx in range(len(labels))]
@@ -2176,9 +2176,6 @@ def chart_activity():
                 if _series_has_activity(remote_rate):
                     sync_rate = remote_rate
                     sync_fallback = "remote"
-        if not _series_has_activity(activity_rate) and _series_has_activity(sync_rate):
-            activity_rate = _sync_series_clone(labels, sync_rate)
-            activity_fallback = True
         return jsonify({
             "labels": labels,
             "activity_rate": activity_rate,
@@ -2206,7 +2203,18 @@ def chart_activity():
         height_remote_series_raw = [v for _,v in hist_store.get("height_remote", [])]
         if labels:
             totals = [max(_finite(total_series_raw[idx], 0.0), 0.0) if idx < len(total_series_raw) else 0.0 for idx in range(len(labels))]
-            activity_rate = _rate_series_from(labels, totals)
+            mined_series = [v for _,v in hist_store.get("mined", [])]
+            processed_series = [v for _,v in hist_store.get("processed", [])]
+            sealed_series = [v for _,v in hist_store.get("sealed", [])]
+            mined_rate = _rate_series_from(labels, mined_series)
+            processed_rate = _rate_series_from(labels, processed_series)
+            sealed_rate = _rate_series_from(labels, sealed_series)
+            activity_rate = []
+            for idx in range(len(labels)):
+                m = mined_rate[idx] if idx < len(mined_rate) else 0.0
+                pr = processed_rate[idx] if idx < len(processed_rate) else 0.0
+                se = sealed_rate[idx] if idx < len(sealed_rate) else 0.0
+                activity_rate.append(max(_finite(m + pr + se, 0.0), 0.0))
             if height_dx_series:
                 sync_rate = [max(_finite(height_dx_series[idx], 0.0), 0.0) if idx < len(height_dx_series) else 0.0 for idx in range(len(labels))]
             else:
@@ -2216,9 +2224,6 @@ def chart_activity():
                 if _series_has_activity(remote_rate):
                     sync_rate = remote_rate
                     sync_fallback = "remote"
-            if not _series_has_activity(activity_rate) and _series_has_activity(sync_rate):
-                activity_rate = _sync_series_clone(labels, sync_rate)
-                activity_fallback = True
             return jsonify({
                 "labels": labels,
                 "activity_rate": activity_rate,
@@ -2236,7 +2241,18 @@ def chart_activity():
         totals = _activity_total_series_locked()
         height_points = list(height_series)
         remote_points = list(remote_height_series)
-    activity_rate = _rate_series_from(labels, totals)
+    mined_series = list(activity_mined)
+    processed_series = list(activity_processed)
+    sealed_series = list(activity_sealed)
+    mined_rate = _rate_series_from(labels, mined_series)
+    processed_rate = _rate_series_from(labels, processed_series)
+    sealed_rate = _rate_series_from(labels, sealed_series)
+    activity_rate = []
+    for idx in range(len(labels)):
+        m = mined_rate[idx] if idx < len(mined_rate) else 0.0
+        pr = processed_rate[idx] if idx < len(processed_rate) else 0.0
+        se = sealed_rate[idx] if idx < len(sealed_rate) else 0.0
+        activity_rate.append(max(_finite(m + pr + se, 0.0), 0.0))
     height_rate_map = {}
     if height_points:
         height_labels = [ts for ts,_ in height_points]
@@ -2256,9 +2272,6 @@ def chart_activity():
         if _series_has_activity(remote_sync):
             sync_rate = remote_sync
             sync_fallback = "remote"
-    if not _series_has_activity(activity_rate) and _series_has_activity(sync_rate):
-        activity_rate = _sync_series_clone(labels, sync_rate)
-        activity_fallback = True
     return jsonify({
         "labels": labels,
         "activity_rate": activity_rate,

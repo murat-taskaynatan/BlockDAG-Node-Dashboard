@@ -18,7 +18,7 @@
   .kv .k{color:var(--muted);font-size:12px}
   .kv .v{font-size:18px;margin-top:4px}
   canvas{width:100%;height:260px;background:rgba(0,0,0,.12);border-radius:12px;padding:8px}
-  .chart-value-tag{position:absolute;bottom:8px;right:12px;font-size:12px;color:var(--muted);background:rgba(0,0,0,.45);padding:2px 8px;border-radius:999px;font-variant-numeric:tabular-nums;pointer-events:none;white-space:nowrap}
+  .chart-value-tag{position:absolute;top:8px !important;right:12px !important;bottom:auto !important;font-size:12px;color:var(--muted);background:rgba(0,0,0,.45);padding:2px 8px;border-radius:999px;font-variant-numeric:tabular-nums;pointer-events:none;white-space:nowrap}
   .pill{display:inline-block;border-radius:999px;padding:6px 14px;font-size:12px;background:rgba(255,255,255,.08);line-height:1;font-weight:600;transition:background .2s,color .2s}
   .stack{display:grid;grid-template-columns:1fr;gap:16px}
   .header{display:flex;align-items:center;gap:10px;justify-content:space-between;margin-bottom:16px;padding:0 8px;}
@@ -331,7 +331,7 @@ const mkLine = (ctx, label, data, labels) => {
 let charts = {};
 const chartModes = {};
 const activitySeriesLabels = {
-  activity: 'Block Activity Rate (blk/s)',
+  activity: 'Activity Rate (blk/s)',
   sync: 'Sync Rate (blk/s)',
 };
 const baseChartLabels = { peers: 'Peers', latency: 'RPC Latency (ms)' };
@@ -393,12 +393,22 @@ function withNodeParam(url){
   return `${url}${separator}node=${encodeURIComponent(currentNodeId)}`;
 }
 
+function disposeChart(chart){
+  if (!chart) return;
+  const tag = chart._valueTag;
+  if (tag){
+    try{
+      if (tag.isConnected){ tag.remove(); }
+    }catch(_){}
+    chart._valueTag = null;
+  }
+  if (typeof chart.destroy === 'function'){
+    try{ chart.destroy(); }catch(_){}
+  }
+}
+
 function resetCharts(){
-  Object.entries(charts).forEach(([key, chart]) => {
-    if (chart && typeof chart.destroy === 'function'){
-      try{ chart.destroy(); }catch(_){ }
-    }
-  });
+  Object.values(charts).forEach(disposeChart);
   charts = {};
 }
 
@@ -644,9 +654,21 @@ function updateLineChart(key, labels, rawData){
   renderChartValue(key, data, datasetLabel);
 }
 
+function applyValueTagPos(tag){
+  if (!tag) return;
+  tag.style.setProperty('top', '8px', 'important');
+  tag.style.setProperty('right', '12px', 'important');
+  tag.style.setProperty('left', 'auto', 'important');
+  tag.style.setProperty('bottom', 'auto', 'important');
+  tag.style.setProperty('transform', 'none');
+}
+
 function ensureChartTag(chart, label){
   if (!chart) return null;
-  if (chart._valueTag && chart._valueTag.isConnected) return chart._valueTag;
+  if (chart._valueTag && chart._valueTag.isConnected){
+    applyValueTagPos(chart._valueTag);
+    return chart._valueTag;
+  }
   const canvas = chart.canvas;
   if (!canvas || !canvas.parentElement) return null;
   const wrapper = canvas.parentElement;
@@ -654,6 +676,7 @@ function ensureChartTag(chart, label){
   if (style.position === 'static'){ wrapper.style.position = 'relative'; }
   const tag = document.createElement('div');
   tag.className = 'chart-value-tag';
+  applyValueTagPos(tag);
   if (label){
     tag.dataset.series = label;
     tag.title = label;
@@ -1508,11 +1531,7 @@ function updateHeightChart(labels, localSeries, remoteSeries){
   const localDelta = toDeltaSeries(localData);
   const remoteDelta = toDeltaSeries(remoteData);
   if (charts.height){
-    if (charts.height._valueTag && charts.height._valueTag.isConnected){
-      charts.height._valueTag.remove();
-      charts.height._valueTag = null;
-    }
-    try{ charts.height.destroy(); }catch(_){}
+    disposeChart(charts.height);
     charts.height = null;
   }
   charts.height = buildHeightChart(canvas, labelList, localDelta, remoteDelta);
@@ -1755,16 +1774,16 @@ async function refreshCharts(){
     const syncRateRaw = Array.isArray(a.sync_rate) ? a.sync_rate
       : Array.isArray(a.height_dx) ? a.height_dx
       : [];
-    const activityRateSeries = clampRates(alignSeriesLength(activityRateRaw, labels.length));
-    let syncRateSeries = clampRates(alignSeriesLength(syncRateRaw, labels.length));
+    const activityRateSeries = alignSeriesLength(activityRateRaw, labels.length);
+    let syncRateSeries = alignSeriesLength(syncRateRaw, labels.length);
     if (!syncRateSeries.some(v => Number.isFinite(v))){
       const heightSeries = Array.isArray(a.height_local) ? a.height_local : [];
-      syncRateSeries = clampRates(alignSeriesLength(deriveRateSeries(labels, heightSeries), labels.length));
+      syncRateSeries = alignSeriesLength(deriveRateSeries(labels, heightSeries), labels.length);
     }
     const ctx = document.getElementById('activityChart')?.getContext('2d');
     if (ctx){
       if (charts.activity && charts.activity.data.datasets.length !== 2){
-        try{ charts.activity.destroy(); }catch(_){ }
+        disposeChart(charts.activity);
         charts.activity = null;
       }
       if (!charts.activity){
@@ -1780,7 +1799,10 @@ async function refreshCharts(){
           options:{
             animation:false, responsive:true, maintainAspectRatio:false,
             scales:{ x:{ ticks:{display:false}}, y:{ beginAtZero:true }},
-            plugins:{ legend:{ display:true } }
+            plugins:{
+              legend:{ display:true },
+              legendOffset:{ x:-80 }
+            }
           }
         });
         charts.activity._valueTag = null;
@@ -1843,11 +1865,27 @@ async function preloadHistory(){
 
     const actLabels = labelsFor('activity');
     if (actLabels.length){
-      const totals = seriesFor('activity').map(v => {
+      const minedTotals = seriesFor('mined').map(v => {
         const num = Number(v);
-        return Number.isFinite(num) ? num : null;
+        return Number.isFinite(num) ? Math.max(num, 0) : 0;
       });
-      const activityRateSeries = deriveRateSeries(actLabels, totals);
+      const processedTotals = seriesFor('processed').map(v => {
+        const num = Number(v);
+        return Number.isFinite(num) ? Math.max(num, 0) : 0;
+      });
+      const sealedTotals = seriesFor('sealed').map(v => {
+        const num = Number(v);
+        return Number.isFinite(num) ? Math.max(num, 0) : 0;
+      });
+      const minedRate = deriveRateSeries(actLabels, minedTotals);
+      const processedRate = deriveRateSeries(actLabels, processedTotals);
+      const sealedRate = deriveRateSeries(actLabels, sealedTotals);
+      const activityRateSeries = actLabels.map((_, idx) => {
+        const m = Number.isFinite(minedRate[idx]) ? Math.max(minedRate[idx], 0) : 0;
+        const p = Number.isFinite(processedRate[idx]) ? Math.max(processedRate[idx], 0) : 0;
+        const s = Number.isFinite(sealedRate[idx]) ? Math.max(sealedRate[idx], 0) : 0;
+        return m + p + s;
+      });
       const syncRates = (() => {
         const heightDxSeries = seriesFor('height_dx').map(v => {
           const num = Number(v);
@@ -1866,7 +1904,7 @@ async function preloadHistory(){
       const ctx = document.getElementById('activityChart')?.getContext('2d');
       if (ctx){
         if (charts.activity && charts.activity.data.datasets.length !== 2){
-          try{ charts.activity.destroy(); }catch(_){ }
+          disposeChart(charts.activity);
           charts.activity = null;
         }
         if (!charts.activity){
@@ -1882,7 +1920,10 @@ async function preloadHistory(){
             options:{
               animation:false, responsive:true, maintainAspectRatio:false,
               scales:{ x:{ ticks:{display:false}}, y:{ beginAtZero:true }},
-              plugins:{ legend:{ display:true } }
+              plugins:{
+                legend:{ display:true },
+                legendOffset:{ x:-80 }
+              }
             }
           });
           charts.activity._valueTag = null;
@@ -2026,17 +2067,6 @@ function wireLogsPanel(){
 }
 
 const pollMs = Number(window.POLL_INTERVAL || 2000) || 2000;
-const RATE_CAP = 200;
-const clampRates = series => {
-  if (!Array.isArray(series)) return series;
-  return series.map(value => {
-    const num = Number(value);
-    if (!Number.isFinite(num)) return value;
-    if (num > RATE_CAP) return RATE_CAP;
-    if (num < -RATE_CAP) return -RATE_CAP;
-    return num;
-  });
-};
 (async () => {
   wireNodeControls();
   wireControls();
