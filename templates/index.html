@@ -10,9 +10,6 @@
   .wrap{max-width:1200px;margin:24px auto;padding:0 16px}
   .card{background:var(--card);border-radius:16px;box-shadow:0 4px 18px rgba(0,0,0,.25);padding:16px}
   .title{font-weight:600;font-size:20px;margin-bottom:10px;display:flex;align-items:center;gap:10px}
-  .node-ctrls__title{justify-content:space-between;flex-wrap:wrap;row-gap:6px}
-  .node-ctrls__title > span:first-child{font-weight:600}
-  .node-ctrls__active{margin-left:auto;font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.08em}
   .grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;margin-top:16px}
   .kvs{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:8px;margin-top:8px}
   .kvs.node-stats{display:flex;flex-wrap:nowrap;gap:8px;overflow-x:auto}
@@ -152,10 +149,7 @@
     </div>
 
     <div class="card" id="nodeControlsCard" hidden>
-      <div class="title node-ctrls__title">
-        <span>Node Controls</span>
-        <span class="node-ctrls__active" id="nodeCurrentId">Node: —</span>
-      </div>
+      <div class="title">Node Controls</div>
       <div class="node-ctrls node-ctrls--node">
         <div class="node-ctrls__row node-ctrls__row--primary">
           <label class="node-ctrls__field node-ctrls__field--node">
@@ -419,35 +413,6 @@ function resetCharts(){
 }
 
 function updateActiveNodeIndicator(){
-  const el = document.getElementById('nodeCurrentId');
-  if (!el) return;
-  const meta = getActiveNodeMeta();
-  const id = (meta && meta.id) || currentNodeId || '';
-  const label = (meta && meta.label) || id;
-  const container = meta && meta.container ? meta.container.trim() : '';
-  let display = 'Node: —';
-  let title = 'No node selected';
-  if (id){
-    display = `Node: ${label}`;
-    if (container && container !== label && container !== id){
-      display += ` (${container})`;
-    } else if (label !== id){
-      display += ` (${id})`;
-    }
-    const parts = [];
-    if (label && label !== id){
-      parts.push(label);
-    }
-    if (id){
-      parts.push(id);
-    }
-    if (container){
-      parts.push(container);
-    }
-    title = parts.length ? parts.join(' • ') : id;
-  }
-  el.textContent = display;
-  el.title = title;
 }
 
 function setActiveNode(nodeId, opts = {}){
@@ -456,7 +421,6 @@ function setActiveNode(nodeId, opts = {}){
   currentNodeId = nodeId;
   try{ localStorage.setItem('dashboard.nodeId', nodeId); }catch(_){ }
   nodeControlState.activeNode = nodeId;
-  updateActiveNodeIndicator();
   if (opts.skipRefresh) return;
   resetCharts();
   refreshStatus();
@@ -491,9 +455,18 @@ function buildChainJobMessage(job){
       const elapsedSec = Math.max(0, (Date.now() - started) / 1000);
       parts.push(`${formatDuration(elapsedSec)} elapsed`);
     }
+    const percentVal = Number(details.percent);
+    if (Number.isFinite(percentVal) && percentVal >= 0){
+      parts.push(`${percentVal.toFixed(percentVal >= 10 ? 1 : 2)}%`);
+    }
     const sizeVal = Number(details.size);
     if (Number.isFinite(sizeVal) && sizeVal >= 0){
       parts.push(formatBytes(sizeVal));
+    }
+    const totalVal = Number(details.total);
+    if (Number.isFinite(totalVal) && totalVal > 0 && !parts.some(p => p.endsWith('%'))){
+      const fallbackPercent = sizeVal && totalVal ? (sizeVal / totalVal) * 100 : 0;
+      parts.push(`${fallbackPercent.toFixed(fallbackPercent >= 10 ? 1 : 2)}%`);
     }
     return parts.join(' · ');
   } else if (isRunning && job.type === 'restore'){
@@ -504,6 +477,19 @@ function buildChainJobMessage(job){
     if (Number.isFinite(started)){
       const elapsedSec = Math.max(0, (Date.now() - started) / 1000);
       parts.push(`${formatDuration(elapsedSec)} elapsed`);
+    }
+    const percentVal = Number(details.percent);
+    if (Number.isFinite(percentVal) && percentVal >= 0){
+      parts.push(`${percentVal.toFixed(percentVal >= 10 ? 1 : 2)}%`);
+    }
+    const sizeVal = Number(details.size);
+    if (Number.isFinite(sizeVal) && sizeVal >= 0){
+      parts.push(formatBytes(sizeVal));
+    }
+    const totalVal = Number(details.total);
+    if (Number.isFinite(totalVal) && totalVal > 0 && !parts.some(p => p.endsWith('%'))){
+      const fallbackPercent = sizeVal && totalVal ? (sizeVal / totalVal) * 100 : 0;
+      parts.push(`${fallbackPercent.toFixed(fallbackPercent >= 10 ? 1 : 2)}%`);
     }
     return parts.join(' · ');
   }
@@ -994,7 +980,6 @@ function renderNodeControls(errorMsg){
   const hostMode = !!nodeControlState.hostMode;
   if (!card) return;
   card.hidden = false;
-  updateActiveNodeIndicator();
   if (nodeSelect){
     nodeSelect.innerHTML = '';
     if (!knownNodes.length){

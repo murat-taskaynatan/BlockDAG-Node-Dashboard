@@ -7,6 +7,8 @@ from flask import Flask, jsonify, render_template, request, abort
 
 APP_START = time.time()
 app = Flask(__name__, template_folder="templates", static_folder="static")
+app.config["TEMPLATES_AUTO_RELOAD"] = True
+app.jinja_env.auto_reload = True
 _log_level_name = (os.getenv("BDAG_LOG_LEVEL", "INFO") or "INFO").strip().upper()
 _log_level = getattr(logging, _log_level_name, logging.INFO)
 app.logger.setLevel(_log_level)
@@ -887,6 +889,54 @@ def _read_timer_interval(timer_path):
                     return line.split("=", 1)[1].strip()
     except Exception:
         return None
+    return None
+
+
+def _read_process_read_bytes(proc: subprocess.Popen | None) -> int | None:
+    if not proc or proc.poll() is not None:
+        return None
+    pids = [proc.pid]
+    try:
+        with open(f"/proc/{proc.pid}/task/{proc.pid}/children", "r", encoding="utf-8") as fh:
+            children = fh.read().strip().split()
+            for child in children:
+                try:
+                    pids.append(int(child))
+                except ValueError:
+                    continue
+    except Exception:
+        pass
+    total = 0
+    found = False
+    for pid in pids:
+        try:
+            with open(f"/proc/{pid}/io", "r", encoding="utf-8") as fh:
+                for line in fh:
+                    if line.startswith("read_bytes:"):
+                        total += int(line.split()[1])
+                        found = True
+                        break
+        except Exception:
+            continue
+    return total if found else None
+
+
+def _get_dir_size_bytes(path: Path) -> int:
+    try:
+        out = subprocess.check_output(["du", "-sb", str(path)], stderr=subprocess.DEVNULL, text=True)
+        first = out.strip().split("\n", 1)[0]
+        size_str = first.split("\t")[0].strip()
+        return int(size_str)
+    except Exception:
+        total = 0
+        for root, _dirs, files in os.walk(path):
+            for name in files:
+                file_path = os.path.join(root, name)
+                try:
+                    total += os.path.getsize(file_path)
+                except OSError:
+                    continue
+        return total
     return None
 
 
@@ -2528,14 +2578,21 @@ def _parse_backup_timestamp(name: str):
         return None
 
 
-def _format_backup_progress_message(dest_name: str, size_bytes: int = 0, elapsed_sec: float | None = None) -> str:
+def _format_backup_progress_message(dest_name: str, size_bytes: int = 0, elapsed_sec: float | None = None, total_bytes: int | None = None, verb: str = "Creating") -> str:
     extras = []
+    if total_bytes and total_bytes > 0:
+        percent = 0.0
+        try:
+            percent = max(0.0, min(100.0, (size_bytes / total_bytes) * 100.0))
+        except Exception:
+            percent = 0.0
+        extras.append(f"{percent:.1f}%")
     if size_bytes > 0:
         extras.append(_format_bytes(size_bytes))
     if elapsed_sec is not None:
         extras.append(f"{elapsed_sec:.1f}s")
     suffix = f" ({', '.join(extras)})" if extras else ""
-    return f"Creating {dest_name}{suffix}"
+    return f"{verb} {dest_name}{suffix}"
 
 
 def list_chain_backups():
@@ -2587,13 +2644,20 @@ def _chain_backup_task(container_name: str):
         if not CHAIN_DATA_DIR.exists():
             raise RuntimeError(f"Chain data directory not found: {CHAIN_DATA_DIR}")
         _check_chain_job_cancelled()
+        try:
+            total_bytes = _get_dir_size_bytes(CHAIN_DATA_DIR)
+        except Exception:
+            total_bytes = 0
         was_running = _stop_container_for_job(container_name)
         _check_chain_job_cancelled()
         timestamp = datetime.utcnow().strftime("%Y%m%d-%H%M%S")
         dest_name = f"{CHAIN_BACKUP_PREFIX}-{timestamp}{CHAIN_BACKUP_SUFFIX}"
         dest_path = CHAIN_BACKUP_DIR / dest_name
         started_ts = time.time()
-        _chain_job_progress(_format_backup_progress_message(dest_name, 0, 0.0), {"path": dest_name, "started": started_ts})
+        progress_details = {"path": dest_name, "started": started_ts}
+        if total_bytes:
+            progress_details["total"] = total_bytes
+        _chain_job_progress(_format_backup_progress_message(dest_name, 0, 0.0, total_bytes), progress_details)
         parent = CHAIN_DATA_DIR.parent
         arcname = CHAIN_DATA_DIR.name
         proc = subprocess.Popen(
@@ -2608,6 +2672,7 @@ def _chain_backup_task(container_name: str):
         try:
             while True:
                 if _chain_job_cancel_event.is_set():
+                    _chain_job_progress(f"Cancelling {dest_name}…", {"path": dest_name, "cancelled": True})
                     proc.terminate()
                     try:
                         proc.wait(timeout=3)
@@ -2625,10 +2690,18 @@ def _chain_backup_task(container_name: str):
                     except Exception:
                         size_bytes = 0
                     elapsed = time.time() - started_ts
-                    progress_details = {"path": dest_name, "started": started_ts, "elapsed": elapsed}
+                    loop_details = {
+                        "path": dest_name,
+                        "started": started_ts,
+                        "elapsed": elapsed,
+                    }
                     if size_bytes:
-                        progress_details["size"] = size_bytes
-                    _chain_job_progress(_format_backup_progress_message(dest_name, size_bytes, elapsed), progress_details)
+                        loop_details["size"] = size_bytes
+                    if total_bytes:
+                        loop_details["total"] = total_bytes
+                        if total_bytes > 0:
+                            loop_details["percent"] = max(0.0, min(100.0, (size_bytes / total_bytes) * 100.0))
+                    _chain_job_progress(_format_backup_progress_message(dest_name, size_bytes, elapsed, total_bytes), loop_details)
                     continue
         finally:
             _chain_job_clear_process()
@@ -2638,6 +2711,10 @@ def _chain_backup_task(container_name: str):
         size = dest_path.stat().st_size
         elapsed = time.time() - started_ts
         details.update({"path": dest_name, "size": size})
+        if total_bytes:
+            details["total"] = total_bytes
+            if total_bytes > 0:
+                details["percent"] = 100.0
         status = "success"
         message = f"Backup created: {dest_name} ({_format_bytes(size)}, {elapsed:.1f}s)"
     except ChainJobCancelled as exc:
@@ -2677,6 +2754,10 @@ def _chain_restore_task(container_name: str, backup_name: str):
     message = ''
     backup_path = (CHAIN_BACKUP_DIR / backup_name).resolve()
     parent = CHAIN_DATA_DIR.parent
+    proc: subprocess.Popen | None = None
+    total_bytes = 0
+    started_ts = time.time()
+    base_read = 0
     try:
         _check_chain_job_cancelled()
         _ensure_backup_dir()
@@ -2688,6 +2769,12 @@ def _chain_restore_task(container_name: str, backup_name: str):
         if not backup_path.exists():
             raise RuntimeError(f"Backup not found: {backup_name}")
         _check_chain_job_cancelled()
+        try:
+            total_bytes = backup_path.stat().st_size
+        except Exception:
+            total_bytes = 0
+        if total_bytes:
+            details["total"] = total_bytes
         parent.mkdir(parents=True, exist_ok=True)
         _cleanup_chain_restore_temp_dirs(parent, keep=[CHAIN_DATA_DIR])
         was_running = _stop_container_for_job(container_name)
@@ -2696,6 +2783,11 @@ def _chain_restore_task(container_name: str, backup_name: str):
             temp_backup = _unique_temp_path(parent / f"{CHAIN_DATA_DIR.name}.pre-restore")
             shutil.move(str(CHAIN_DATA_DIR), str(temp_backup))
         _check_chain_job_cancelled()
+        started_ts = time.time()
+        progress_details = {"path": backup_name, "started": started_ts}
+        if total_bytes:
+            progress_details["total"] = total_bytes
+        _chain_job_progress(_format_backup_progress_message(backup_name, 0, 0.0, total_bytes, verb="Restoring"), progress_details)
         proc = subprocess.Popen(
             ["tar", "-xzf", str(backup_path), "-C", str(parent)],
             stdout=subprocess.PIPE,
@@ -2705,9 +2797,12 @@ def _chain_restore_task(container_name: str, backup_name: str):
         _chain_job_set_process(proc)
         stdout = ''
         stderr = ''
+        base_read = _read_process_read_bytes(proc) or 0
+        last_read = 0
         try:
             while True:
                 if _chain_job_cancel_event.is_set():
+                    _chain_job_progress(f"Cancelling restore {backup_name}…", {"path": backup_name, "cancelled": True})
                     proc.terminate()
                     try:
                         proc.wait(timeout=3)
@@ -2720,14 +2815,37 @@ def _chain_restore_task(container_name: str, backup_name: str):
                     stderr = err or ''
                     break
                 except subprocess.TimeoutExpired:
+                    current_read = _read_process_read_bytes(proc)
+                    if current_read is None:
+                        read_bytes = last_read
+                    else:
+                        read_bytes = max(0, current_read - base_read)
+                        last_read = read_bytes
+                    elapsed = time.time() - started_ts
+                    loop_details = {
+                        "path": backup_name,
+                        "started": started_ts,
+                        "elapsed": elapsed,
+                    }
+                    if read_bytes:
+                        loop_details["size"] = read_bytes
+                    if total_bytes:
+                        loop_details["total"] = total_bytes
+                        if read_bytes:
+                            loop_details["percent"] = max(0.0, min(100.0, (read_bytes / total_bytes) * 100.0))
+                    _chain_job_progress(_format_backup_progress_message(backup_name, read_bytes or 0, elapsed, total_bytes, verb="Restoring"), loop_details)
                     continue
         finally:
             _chain_job_clear_process()
         if proc.returncode != 0:
             raise RuntimeError(stderr.strip() or stdout.strip() or "Restore command failed")
+        elapsed = time.time() - started_ts
+        size_bytes = _get_dir_size_bytes(CHAIN_DATA_DIR) if CHAIN_DATA_DIR.exists() else total_bytes
         status = "success"
-        message = f"Restored from {backup_name}"
-        details["restored"] = backup_name
+        message = f"Restored from {backup_name} ({_format_bytes(size_bytes)}, {elapsed:.1f}s)"
+        details.update({"restored": backup_name, "size": size_bytes, "elapsed": elapsed, "percent": 100.0})
+        if total_bytes and "total" not in details:
+            details["total"] = total_bytes
         if temp_backup and temp_backup.exists():
             shutil.rmtree(temp_backup, ignore_errors=True)
             temp_backup = None
@@ -2735,6 +2853,14 @@ def _chain_restore_task(container_name: str, backup_name: str):
         message = str(exc) or "Chain restore cancelled"
         status = "cancelled"
         details["cancelled"] = True
+        read_bytes = None
+        if proc:
+            current_read = _read_process_read_bytes(proc)
+            if current_read is not None:
+                read_bytes = max(0, current_read - base_read)
+        if read_bytes and details.get("total"):
+            details["size"] = read_bytes
+            details["percent"] = max(0.0, min(100.0, (read_bytes / details["total"]) * 100.0))
         if temp_backup and temp_backup.exists() and not CHAIN_DATA_DIR.exists():
             shutil.move(str(temp_backup), str(CHAIN_DATA_DIR))
             temp_backup = None
