@@ -22,6 +22,58 @@ need_cmd() {
   command -v "$1" >/dev/null 2>&1 || { echo "Error: required command '$1' not found." >&2; exit 1; }
 }
 
+remove_existing_install() {
+  local found=0
+  if [[ -d "$INSTALL_DIR" ]]; then
+    found=1
+  fi
+  if sudo systemctl list-unit-files --type=service --no-legend 2>/dev/null | grep -q "^$SERVICE_NAME"; then
+    found=1
+  fi
+  if sudo systemctl list-unit-files --type=service --no-legend 2>/dev/null | grep -q "^$SIDECAR_SERVICE"; then
+    found=1
+  fi
+  if sudo systemctl list-unit-files --type=timer --no-legend 2>/dev/null | grep -q "^$SIDECAR_TIMER"; then
+    found=1
+  fi
+
+  if ((found == 0)); then
+    printf "  No existing installation detected.\n"
+    return 0
+  fi
+
+  printf "  Existing installation detected; removing...\n"
+
+  sudo systemctl stop "$SERVICE_NAME" 2>/dev/null || true
+  sudo systemctl disable "$SERVICE_NAME" 2>/dev/null || true
+
+  if sudo systemctl list-unit-files --type=service --no-legend 2>/dev/null | grep -q "^$SIDECAR_SERVICE"; then
+    sudo systemctl stop "$SIDECAR_SERVICE" 2>/dev/null || true
+    sudo systemctl disable "$SIDECAR_SERVICE" 2>/dev/null || true
+  fi
+  if sudo systemctl list-unit-files --type=timer --no-legend 2>/dev/null | grep -q "^$SIDECAR_TIMER"; then
+    sudo systemctl stop "$SIDECAR_TIMER" 2>/divnull || true
+    sudo systemctl disable "$SIDECAR_TIMER" 2>/dev/null || true
+  fi
+
+  sudo rm -f "$SYSTEMD_DIR/$SERVICE_NAME"
+  sudo rm -f "$SYSTEMD_DIR/$SIDECAR_SERVICE"
+  sudo rm -f "$SYSTEMD_DIR/$SIDECAR_TIMER"
+  sudo rm -f "/usr/local/bin/$SIDECAR_SCRIPT"
+
+  ENV_DIR="/etc/blockdag-dashboard"
+  ENV_FILE="$ENV_DIR/dashboard.env"
+  if [[ -f "$ENV_FILE" ]]; then
+    sudo rm -f "$ENV_FILE"
+  fi
+  if [[ -d "$INSTALL_DIR" ]]; then
+    sudo rm -rf "$INSTALL_DIR"
+  fi
+
+  sudo systemctl daemon-reload
+  printf "  Previous installation removed.\n"
+}
+
 ensure_packages() {
   local missing=()
   local packages=("$@")
@@ -86,7 +138,7 @@ resolve_dashboard_port() {
 }
 
 need_cmd sudo
-printf "[1/8] Ensuring system dependencies...\n"
+printf "[1/9] Ensuring system dependencies...\n"
 ensure_packages git rsync python3 python3-venv python3-pip
 need_cmd git
 need_cmd "$PYTHON_BIN"
@@ -96,10 +148,13 @@ need_cmd systemctl
 TEMP_ROOT="$(mktemp -d)"
 trap 'rm -rf "$TEMP_ROOT"' EXIT
 
-printf "[2/8] Cloning %s (ref %s)...\n" "$REPO_URL" "$REPO_REF"
+printf "[2/9] Checking for existing installation...\n"
+remove_existing_install
+
+printf "[3/9] Cloning %s (ref %s)...\n" "$REPO_URL" "$REPO_REF"
 git clone --depth 1 --branch "$REPO_REF" --single-branch "$REPO_URL" "$TEMP_ROOT/repo"
 
-printf "[3/8] Syncing files to %s...\n" "$INSTALL_DIR"
+printf "[4/9] Syncing files to %s...\n" "$INSTALL_DIR"
 sudo mkdir -p "$INSTALL_DIR"
 sudo chown "$SERVICE_USER":"$SERVICE_GROUP" "$INSTALL_DIR"
 rsync -a --delete "$TEMP_ROOT/repo/" "$INSTALL_DIR/"
@@ -140,7 +195,7 @@ ensure_env_value(){
 ensure_env_value "BDAG_CHAIN_DATA_DIR" "$default_chain_data"
 ensure_env_value "BDAG_CHAIN_BACKUP_DIR" "$default_chain_backups"
 
-printf "[4/8] Bootstrapping virtual environment...\n"
+printf "[5/9] Bootstrapping virtual environment...\n"
 "$PYTHON_BIN" -m venv "$INSTALL_DIR/.venv"
 source "$INSTALL_DIR/.venv/bin/activate"
 pip install --upgrade pip >/dev/null
@@ -153,10 +208,10 @@ deactivate
 
 service_path="$INSTALL_DIR/scripts/$SERVICE_NAME"
 if [[ -f "$service_path" ]]; then
-  printf "[5/8] Using bundled service file %s\n" "$service_path"
+  printf "[6/9] Using bundled service file %s\n" "$service_path"
   sudo install -m 0644 "$service_path" "$SYSTEMD_DIR/$SERVICE_NAME"
 else
-  printf "[5/8] Generating systemd service file...\n"
+  printf "[6/9] Generating systemd service file...\n"
   sudo tee "$SYSTEMD_DIR/$SERVICE_NAME" >/dev/null <<EOF
 [Unit]
 Description=BlockDAG Web Dashboard (Flask via Waitress)
@@ -179,7 +234,7 @@ WantedBy=multi-user.target
 EOF
 fi
 
-printf "[6/8] Installing sidecar helper...\n"
+printf "[7/9] Installing sidecar helper...\n"
 if [[ -f "$INSTALL_DIR/scripts/$SIDECAR_SCRIPT" ]]; then
   sudo install -m 0755 "$INSTALL_DIR/scripts/$SIDECAR_SCRIPT" "/usr/local/bin/$SIDECAR_SCRIPT"
 else
@@ -196,14 +251,14 @@ else
   echo "Warning: sidecar timer file scripts/$SIDECAR_TIMER not found." >&2
 fi
 
-printf "[7/8] Enabling and starting %s...\n" "$SERVICE_NAME"
+printf "[8/9] Enabling and starting %s...\n" "$SERVICE_NAME"
 sudo systemctl daemon-reload
 sudo systemctl enable --now "$SERVICE_NAME"
 if systemctl list-unit-files | grep -q "^$SIDECAR_TIMER"; then
   sudo systemctl enable --now "$SIDECAR_TIMER"
 fi
 
-printf "[8/8] Installation complete.\n"
+printf "[9/9] Installation complete.\n"
 systemctl status "$SERVICE_NAME" --no-pager || true
 
 dashboard_host="$(resolve_dashboard_host)"

@@ -24,6 +24,56 @@ need_cmd() {
   command -v "$1" >/dev/null 2>&1 || { echo "Error: required command '$1' not found." >&2; exit 1; }
 }
 
+remove_existing_install() {
+  local found=0
+  if [[ -d "$INSTALL_DIR" ]]; then
+    found=1
+  fi
+  if sudo systemctl list-unit-files --type=service --no-legend 2>/dev/null | grep -q "^$SERVICE_NAME"; then
+    found=1
+  fi
+  if sudo systemctl list-unit-files --type=service --no-legend 2>/dev/null | grep -q "^$SIDECAR_SERVICE"; then
+    found=1
+  fi
+  if sudo systemctl list-unit-files --type=timer --no-legend 2>/dev/null | grep -q "^$SIDECAR_TIMER"; then
+    found=1
+  fi
+
+  if ((found == 0)); then
+    printf "  No existing installation detected.\n"
+    return 0
+  fi
+
+  printf "  Existing installation detected; removing...\n"
+
+  sudo systemctl stop "$SERVICE_NAME" 2>/dev/null || true
+  sudo systemctl disable "$SERVICE_NAME" 2>/dev/null || true
+
+  if sudo systemctl list-unit-files --type=service --no-legend 2>/dev/null | grep -q "^$SIDECAR_SERVICE"; then
+    sudo systemctl stop "$SIDECAR_SERVICE" 2>/dev/null || true
+    sudo systemctl disable "$SIDECAR_SERVICE" 2>/dev/null || true
+  fi
+  if sudo systemctl list-unit-files --type=timer --no-legend 2>/dev/null | grep -q "^$SIDECAR_TIMER"; then
+    sudo systemctl stop "$SIDECAR_TIMER" 2>/dev/null || true
+    sudo systemctl disable "$SIDECAR_TIMER" 2>/dev/null || true
+  fi
+
+  sudo rm -f "$SYSTEMD_DIR/$SERVICE_NAME"
+  sudo rm -f "$SYSTEMD_DIR/$SIDECAR_SERVICE"
+  sudo rm -f "$SYSTEMD_DIR/$SIDECAR_TIMER"
+  sudo rm -f "/usr/local/bin/$SIDECAR_SCRIPT"
+
+  if [[ -f "$ENV_FILE" ]]; then
+    sudo rm -f "$ENV_FILE"
+  fi
+  if [[ -d "$INSTALL_DIR" ]]; then
+    sudo rm -rf "$INSTALL_DIR"
+  fi
+
+  sudo systemctl daemon-reload
+  printf "  Previous installation removed.\n"
+}
+
 ensure_packages() {
   local missing=()
   local packages=("$@")
@@ -88,24 +138,27 @@ resolve_dashboard_port() {
 }
 
 need_cmd sudo
-printf "[1/8] Ensuring system dependencies...\n"
+printf "[1/9] Ensuring system dependencies...\n"
 ensure_packages git rsync python3 python3-venv python3-pip
 need_cmd "$PYTHON_BIN"
 need_cmd rsync
 need_cmd systemctl
 
-printf "[2/8] Preparing install directory %s...\n" "$INSTALL_DIR"
+printf "[2/9] Checking for existing installation...\n"
+remove_existing_install
+
+printf "[3/9] Preparing install directory %s...\n" "$INSTALL_DIR"
 sudo mkdir -p "$INSTALL_DIR"
 sudo chown "$SERVICE_USER":"$SERVICE_GROUP" "$INSTALL_DIR"
 
-printf "[3/8] Syncing dashboard files from %s...\n" "$REPO_SRC"
+printf "[4/9] Syncing dashboard files from %s...\n" "$REPO_SRC"
 rsync -a --delete \
   --exclude='.git/' \
   --exclude='.venv/' \
   --exclude='__pycache__/' \
   "$REPO_SRC/" "$INSTALL_DIR/"
 
-printf "[4/8] Bootstrapping virtual environment...\n"
+printf "[5/9] Bootstrapping virtual environment...\n"
 "$PYTHON_BIN" -m venv "$INSTALL_DIR/.venv"
 source "$INSTALL_DIR/.venv/bin/activate"
 export PIP_BREAK_SYSTEM_PACKAGES=1
@@ -117,7 +170,7 @@ else
 fi
 deactivate
 
-printf "[5/8] Installing dashboard systemd service...\n"
+printf "[6/9] Installing dashboard systemd service...\n"
 service_path="$INSTALL_DIR/scripts/$SERVICE_NAME"
 if [[ -f "$service_path" ]]; then
   sudo install -m 0644 "$service_path" "$SYSTEMD_DIR/$SERVICE_NAME"
@@ -145,7 +198,7 @@ WantedBy=multi-user.target
 EOF
 fi
 
-printf "[6/8] Installing sidecar helper...\n"
+printf "[7/9] Installing sidecar helper...\n"
 if [[ -f "$INSTALL_DIR/scripts/$SIDECAR_SCRIPT" ]]; then
   sudo install -m 0755 "$INSTALL_DIR/scripts/$SIDECAR_SCRIPT" "/usr/local/bin/$SIDECAR_SCRIPT"
 else
@@ -162,14 +215,14 @@ else
   echo "Warning: sidecar timer file scripts/$SIDECAR_TIMER not found." >&2
 fi
 
-printf "[7/8] Enabling services...\n"
+printf "[8/9] Enabling services...\n"
 sudo systemctl daemon-reload
 sudo systemctl enable --now "$SERVICE_NAME"
 if systemctl list-unit-files | grep -q "^$SIDECAR_TIMER"; then
   sudo systemctl enable --now "$SIDECAR_TIMER"
 fi
 
-printf "[8/8] Installation complete.\n"
+printf "[9/9] Installation complete.\n"
 systemctl status "$SERVICE_NAME" --no-pager || true
 
 dashboard_host="$(resolve_dashboard_host)"
