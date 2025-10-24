@@ -57,6 +57,203 @@ CHAIN_BACKUP_PREFIX = (os.getenv("BDAG_CHAIN_BACKUP_PREFIX", "blockdag-chaindata
 CHAIN_BACKUP_SUFFIX = (os.getenv("BDAG_CHAIN_BACKUP_SUFFIX", ".tar.gz") or ".tar.gz").strip()
 CHAIN_BACKUP_MAX = max(0, int(os.getenv("BDAG_CHAIN_BACKUP_MAX", "0")))
 
+
+def _normalize_path(value) -> Path | None:
+    if value is None:
+        return None
+    path = Path(value).expanduser()
+    try:
+        return path.resolve()
+    except Exception:
+        return path
+
+
+def _find_first_existing(candidates: list[Path | None]) -> Path | None:
+    for candidate in candidates:
+        if not candidate:
+            continue
+        try:
+            if candidate.exists():
+                return candidate.resolve()
+        except Exception:
+            if candidate.exists():
+                return candidate
+    return None
+
+
+def _auto_discover_chain_paths():
+    global CHAIN_DATA_DIR, CHAIN_BACKUP_DIR
+    initial_data = CHAIN_DATA_DIR
+    initial_backup = CHAIN_BACKUP_DIR
+
+    repo_root = Path(__file__).resolve().parent
+    home = Path.home()
+
+    def _extract_script_root(path: Path | None) -> Path | None:
+        if not path:
+            return None
+        for parent in path.parents:
+            name = parent.name.lower()
+            if "blockdag" in name and "script" in name:
+                return parent
+        return None
+
+    script_root_from_data = _extract_script_root(initial_data)
+    script_root_from_backup = _extract_script_root(initial_backup)
+
+    script_roots: list[Path] = []
+    seen_script_roots: set[str] = set()
+
+    def _maybe_add_script_root(candidate):
+        candidate = _normalize_path(candidate)
+        if not candidate or not candidate.exists():
+            return
+        key = str(candidate)
+        if key in seen_script_roots:
+            return
+        seen_script_roots.add(key)
+        script_roots.append(candidate)
+
+    def _add_root_variants(base, home_dirs=None):
+        if not base:
+            return
+        base = _normalize_path(base)
+        if not base:
+            return
+        if "blockdag" in base.name.lower() and "script" in base.name.lower() and base.exists():
+            _maybe_add_script_root(base)
+        variants = (
+            base / "blockdag-scripts",
+            base / "BlockDAG-Scripts",
+            base / "blockdag_scripts",
+        )
+        for item in variants:
+            _maybe_add_script_root(item)
+        if base.name.lower() != "blockdag":
+            try:
+                for match in base.glob("blockdag*/blockdag-scripts"):
+                    _maybe_add_script_root(match)
+            except Exception:
+                pass
+        if home_dirs and not base.exists():
+            parts = base.parts
+            if len(parts) >= 3 and parts[1] == "home":
+                suffix_parts = parts[3:]
+                suffix = Path(*suffix_parts) if suffix_parts else Path()
+                for home_dir in home_dirs:
+                    if suffix_parts:
+                        _maybe_add_script_root(home_dir / suffix)
+                    else:
+                        _maybe_add_script_root(home_dir)
+
+    def _iter_home_dirs():
+        homes: list[Path] = []
+        seen_homes: set[str] = set()
+        preferred = [home]
+        try:
+            sys_home = Path(os.getenv("HOME")) if os.getenv("HOME") else None
+        except Exception:
+            sys_home = None
+        if sys_home:
+            preferred.append(sys_home)
+        homes_root = Path("/home")
+        if homes_root.exists():
+            preferred.append(homes_root)
+            try:
+                for entry in homes_root.iterdir():
+                    if entry.is_dir():
+                        preferred.append(entry)
+            except Exception:
+                pass
+        for candidate in preferred:
+            candidate = _normalize_path(candidate)
+            if not candidate or not candidate.exists():
+                continue
+            key = str(candidate)
+            if key in seen_homes:
+                continue
+            seen_homes.add(key)
+            homes.append(candidate)
+        return homes
+
+    potential_roots = [
+        script_root_from_data,
+        script_root_from_backup,
+        repo_root,
+        repo_root.parent,
+        home,
+        home / "blockdag",
+        Path("/opt"),
+    ]
+
+    home_dirs = _iter_home_dirs()
+
+    for root in potential_roots:
+        _add_root_variants(root, home_dirs)
+    _add_root_variants(home / "blockdag-scripts", home_dirs)
+    _add_root_variants(repo_root.parent / "blockdag-scripts", home_dirs)
+    _add_root_variants(Path("/opt/blockdag-scripts"), home_dirs)
+    for home_dir in home_dirs:
+        _add_root_variants(home_dir, home_dirs)
+        _add_root_variants(home_dir / "blockdag", home_dirs)
+        _add_root_variants(home_dir / "bdag", home_dirs)
+
+    data_candidates = [_normalize_path(initial_data)]
+    for root in script_roots:
+        data_candidates.extend([
+            _normalize_path(root / "bin" / "bdag" / "data"),
+            _normalize_path(root / "bdag" / "data"),
+            _normalize_path(root / "data"),
+            _normalize_path(root / "bin" / "data"),
+        ])
+
+    data_candidates.append(_normalize_path(home / "blockdag-scripts" / "bin" / "bdag" / "data"))
+    data_candidates.append(_normalize_path(home / "blockdag" / "blockdag-scripts" / "bin" / "bdag" / "data"))
+    data_candidates.append(_normalize_path(Path("/opt/blockdag-scripts/bin/bdag/data")))
+
+    discovered_data = _find_first_existing(data_candidates)
+    if discovered_data and discovered_data != initial_data:
+        CHAIN_DATA_DIR = discovered_data
+        try:
+            app.logger.info("Auto-discovered chain data directory at %s (default was %s)", CHAIN_DATA_DIR, initial_data)
+        except Exception:
+            pass
+
+    backup_candidates = [_normalize_path(initial_backup)]
+    for root in script_roots:
+        backup_candidates.extend([
+            _normalize_path(root / "backups"),
+            _normalize_path(root / "backup"),
+        ])
+    backup_candidates.extend([
+        _normalize_path(home / "blockdag-scripts" / "backups"),
+        _normalize_path(home / "blockdag" / "backups"),
+        _normalize_path(home / "backups"),
+        _normalize_path(Path("/opt/blockdag-scripts/backups")),
+    ])
+
+    discovered_backup = _find_first_existing(backup_candidates)
+    if not discovered_backup:
+        for candidate in backup_candidates:
+            if not candidate:
+                continue
+            try:
+                parent_exists = candidate.parent.exists()
+            except Exception:
+                parent_exists = False
+            if parent_exists:
+                discovered_backup = candidate
+                break
+    if discovered_backup and discovered_backup != initial_backup:
+        CHAIN_BACKUP_DIR = _normalize_path(discovered_backup)
+        try:
+            app.logger.info("Auto-discovered chain backup directory at %s (default was %s)", CHAIN_BACKUP_DIR, initial_backup)
+        except Exception:
+            pass
+
+
+_auto_discover_chain_paths()
+
 _chain_job_lock = threading.Lock()
 _chain_job_state = {
     "active": False,
