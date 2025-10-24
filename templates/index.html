@@ -338,6 +338,7 @@ const activitySeriesLabels = {
 const baseChartLabels = { peers: 'Peers', latency: 'RPC Latency (ms)' };
 const NODE_CTRL_REFRESH_MS = 10000;
 const nodeControlState = { enabled:false, hostMode:false, containers:[], nodes:[], activeNode:null, lastFetched:0, chainBackups:[], chainBackupsLastFetched:0, chainJob:null, chainEnabled:false, chainEnabledServer:false };
+let backupScanState = { message:'', ok:true };
 let knownNodes = [];
 let currentNodeId = (localStorage.getItem('dashboard.nodeId') || '').trim();
 let nodeControlPendingMessage = null;
@@ -806,6 +807,7 @@ function setChainControlStatus(msg, ok = true){
 
 function setBackupScanStatus(msg, ok = true){
   const lowered = (msg || '').toLowerCase();
+  backupScanState = { message: lowered, ok: !!ok };
   setChainControlStatus(lowered, ok);
 }
 
@@ -1200,6 +1202,7 @@ function renderChainControls(){
     select.value = pendingOpt.value;
   }
   if (jobActive){
+    backupScanState = { message:'', ok:true };
     setChainControlStatus(jobMessage || job.message || `Chain ${jobType || 'operation'} in progress…`, job.status !== 'error');
     backupBtn.disabled = true;
     restoreBtn.disabled = true;
@@ -1221,9 +1224,13 @@ function renderChainControls(){
       scanBtn.disabled = false;
     }
     if (job && (jobMessage || job.message)){
+      backupScanState = { message:'', ok:true };
       setChainControlStatus(jobMessage || job.message, job.status !== 'error');
     } else if (!enabled){
+      backupScanState = { message:'', ok:true };
       setChainControlStatus('Select a node with chain backups available.', false);
+    } else if (backupScanState.message){
+      setChainControlStatus(backupScanState.message, backupScanState.ok);
     } else {
       setChainControlStatus(hasBackups ? 'Ready.' : 'No backups found.', hasBackups);
     }
@@ -1366,6 +1373,7 @@ async function performNodeAction(action){
     await scanChainBackups();
     return;
   }
+  backupScanState = { message:'', ok:true };
   const ACTION_MAP = {
     restart:'docker_restart',
     start:'docker_start',
