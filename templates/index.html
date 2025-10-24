@@ -78,7 +78,7 @@
 #nodeControlsCard .node-ctrls__field--chain select{width:100%;min-width:0;max-width:285px;height:34px;padding:.35rem .6rem}
 #nodeControlsCard .chain-backup-select{height:34px;padding:.35rem .6rem;line-height:1.2;}
 #nodeControlsCard .node-ctrls__row--chain{margin-bottom:6px}
-#nodeControlsCard .node-ctrls__actions--chain{display:flex;gap:8px;align-items:center;justify-content:flex-start;flex-wrap:wrap}
+#nodeControlsCard .node-ctrls__actions--chain{display:flex;gap:8px;align-items:center;justify-content:flex-start;flex-wrap:nowrap;flex:0 0 auto}
 #nodeControlsCard .node-ctrls__actions--chain .btn{min-width:140px;width:auto;flex:0 0 auto;white-space:nowrap}
 #nodeControlsCard .node-ctrls__status{display:block;font-size:12px;line-height:1.3;color:var(--muted);min-height:1.2em;opacity:1;transition:opacity .2s ease}
 #nodeControlsCard .node-ctrls__status--chain{text-transform:none;letter-spacing:normal;display:block;height:1.2em;margin-top:2px;text-align:left}
@@ -92,7 +92,7 @@
   #nodeControlsCard .node-ctrls__field--chain select{max-width:100%}
   #nodeControlsCard .node-ctrls__status--chain{text-align:left;text-transform:none;letter-spacing:normal}
   #nodeControlsCard .node-ctrls__actions--chain{justify-content:flex-start;flex-wrap:wrap}
-  #nodeControlsCard .node-ctrls__actions--chain .btn{flex:1 1 140px;width:auto}
+  #nodeControlsCard .node-ctrls__actions--chain .btn{flex:1 1 150px;width:auto}
   #nodeControlsCard .node-ctrls__row--primary{gap:12px}
   #nodeControlsCard .node-ctrls__row--primary .node-ctrls__field--auto{margin-left:0}
   #nodeControlsCard .node-ctrls__actions--auto{margin-left:0}
@@ -193,7 +193,7 @@
             <button class="btn btn--danger" data-node-action="chain_cancel" id="btnChainCancel" disabled>Stop</button>
           </div>
         </div>
-        <span class="node-ctrls__meta node-ctrls__meta--status node-ctrls__status node-ctrls__status--chain" id="chainControlStatus">Select a node with chain backups available.</span>
+        <span class="node-ctrls__meta node-ctrls__meta--status node-ctrls__status node-ctrls__status--chain" id="chainControlStatus">&nbsp;</span>
       </div>
     </div>
 
@@ -344,6 +344,8 @@ const NODE_CTRL_REFRESH_MS = 10000;
 const nodeControlState = { enabled:false, hostMode:false, containers:[], nodes:[], activeNode:null, lastFetched:0, chainBackups:[], chainBackupsLastFetched:0, chainJob:null, chainEnabled:false, chainEnabledServer:false };
 let backupScanState = { message:'', ok:true };
 let backupScanTimer = null;
+let chainStatusTimer = null;
+let suppressChainStatusTimer = false;
 const BACKUP_STATUS_DEFAULT = '';
 
 function _showDefaultBackupStatus(){
@@ -351,7 +353,17 @@ function _showDefaultBackupStatus(){
     clearTimeout(backupScanTimer);
     backupScanTimer = null;
   }
+  if (chainStatusTimer){
+    clearTimeout(chainStatusTimer);
+    chainStatusTimer = null;
+  }
+  const activeJob = nodeControlState && nodeControlState.chainJob && nodeControlState.chainJob.status === 'active';
+  if (activeJob){
+    return;
+  }
+  suppressChainStatusTimer = true;
   setChainControlStatus('', true);
+  suppressChainStatusTimer = false;
 }
 let knownNodes = [];
 let currentNodeId = (localStorage.getItem('dashboard.nodeId') || '').trim();
@@ -811,14 +823,46 @@ function setNodeControlButtonsDisabled(disabled){
 function setChainControlStatus(msg, ok = true){
   const el = document.getElementById('chainControlStatus');
   if (!el) return;
-  el.textContent = msg || '';
-  const lowered = (msg || '').toLowerCase();
+  const message = msg || '';
+  el.textContent = message;
+  const lowered = message.toLowerCase();
   let color = 'var(--muted)';
   if (!ok && (lowered.includes('fail') || lowered.includes('error') || lowered.includes('unable'))){
     color = 'var(--bad)';
   }
   el.style.color = color;
-  el.style.opacity = msg ? 1 : 0;
+  el.style.opacity = message ? 1 : 0;
+  if (chainStatusTimer){
+    clearTimeout(chainStatusTimer);
+    chainStatusTimer = null;
+  }
+  const trimmed = message.trim();
+  const shouldHold = (() => {
+    if (!trimmed) return false;
+    if (nodeControlState && nodeControlState.chainJob && nodeControlState.chainJob.status === 'active'){
+      return true;
+    }
+    const loweredMessage = trimmed.toLowerCase();
+    if (trimmed.endsWith('…') || trimmed.endsWith('...')) return true;
+    if (loweredMessage.includes('in progress')) return true;
+    if (loweredMessage.includes('restoring')) return true;
+    if (loweredMessage.includes('creating')) return true;
+    if (loweredMessage.includes('backup') && loweredMessage.includes('%')) return true;
+    if (loweredMessage.includes('pending') || loweredMessage.includes('waiting')) return true;
+    return false;
+  })();
+  if (!suppressChainStatusTimer && trimmed && ok && !shouldHold){
+    const pending = trimmed;
+    chainStatusTimer = window.setTimeout(() => {
+      const current = (document.getElementById('chainControlStatus')?.textContent || '').trim();
+      if (!backupScanState.message && current === pending){
+        suppressChainStatusTimer = true;
+        setChainControlStatus('', true);
+        suppressChainStatusTimer = false;
+      }
+      chainStatusTimer = null;
+    }, 6000);
+  }
 }
 
 function setBackupScanStatus(msg, ok = true){
@@ -1192,10 +1236,8 @@ function renderChainControls(){
         infoParts.push(formatBytes(item.size));
       }
       const suffix = infoParts.length ? ` — ${infoParts.join(' • ')}` : '';
-      let textContent = `${item.name}${suffix}`;
+      const textContent = `${item.name}${suffix}`;
       if (restoreTarget && item.name === restoreTarget){
-        const base = formatBackupNameDisplay(item.name);
-        textContent = jobMessage || `Restoring ${base}`;
         opt.dataset.pending = '1';
         opt.disabled = true;
       }
@@ -1222,8 +1264,8 @@ function renderChainControls(){
   if (jobActive && jobType === 'backup'){
     const details = job.details || {};
     const pendingName = formatBackupNameDisplay(details.path);
-    const pendingLabel = pendingName === 'backup' ? 'Creating backup' : `Creating backup ${pendingName}`;
-    const pendingText = jobMessage || pendingLabel;
+    const pendingLabel = pendingName && pendingName !== 'backup' ? pendingName : 'Pending backup';
+    const pendingText = pendingLabel;
     const pendingValue = (job.details && job.details.path) || '';
     const pendingOpt = document.createElement('option');
     pendingOpt.value = pendingValue;
@@ -1494,8 +1536,6 @@ async function performNodeAction(action){
     statusMessage = `Restoring ${backupSelect.value}`;
     const selectedOpt = backupSelect.options[backupSelect.selectedIndex] || null;
     if (selectedOpt){
-      const displayName = formatBackupNameDisplay(payload.backup);
-      selectedOpt.textContent = `Restoring ${displayName}…`;
       selectedOpt.dataset.pending = '1';
       selectedOpt.disabled = true;
     }
@@ -1595,7 +1635,6 @@ function wireNodeControls(){
         if (!res.ok || !data?.ok){
           throw new Error(data?.error || `HTTP ${res.status}`);
         }
-        const totalContainers = Array.isArray(data?.containers) ? data.containers.filter(c => c && c.status && !String(c.status).toLowerCase().startsWith('exited')).length : null;
         const addedCount = Array.isArray(data.added) ? data.added.length : 0;
         const removedCount = Array.isArray(data.removed) ? data.removed.length : 0;
         const updatedCount = Array.isArray(data.updated) ? data.updated.length : 0;
