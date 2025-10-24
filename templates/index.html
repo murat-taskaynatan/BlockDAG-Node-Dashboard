@@ -71,12 +71,12 @@
 #nodeControlsCard .node-ctrls__row--primary{gap:16px}
 #nodeControlsCard .node-ctrls__row--primary .node-ctrls__actions--container{flex:0 0 auto}
 #nodeControlsCard .node-ctrls__row--primary .node-ctrls__field--auto{flex:1 1 260px;min-width:200px;margin-left:20px}
-#nodeControlsCard .node-ctrls__row--chain{margin-top:2px;display:flex;gap:12px;align-items:flex-end;flex-wrap:nowrap}
+#nodeControlsCard .node-ctrls__row--chain{margin-top:2px;display:flex;gap:12px;align-items:stretch;flex-wrap:nowrap}
 #nodeControlsCard .node-ctrls__field--chain{display:flex;flex-direction:column;gap:4px;min-width:0;flex:1 1 460px;max-width:460px}
 #nodeControlsCard .node-ctrls__field--chain span{opacity:.7}
 #nodeControlsCard .node-ctrls__field--chain select{width:100%;min-width:0;max-width:460px}
-#nodeControlsCard .node-ctrls__actions--chain{display:flex;gap:8px;align-items:center;justify-content:flex-start;flex-wrap:nowrap;flex:0 0 auto}
-#nodeControlsCard .node-ctrls__actions--chain .btn{min-width:110px;flex:0 0 auto;white-space:nowrap}
+#nodeControlsCard .node-ctrls__actions--chain{display:flex;gap:8px;align-items:stretch;justify-content:flex-start;flex-wrap:nowrap;flex:0 0 auto}
+#nodeControlsCard .node-ctrls__actions--chain .btn{min-width:110px;flex:0 0 auto;white-space:nowrap;height:100%;display:flex;align-items:center;justify-content:center;padding-top:.35rem;padding-bottom:.35rem}
 #nodeControlsCard .node-ctrls__status{display:block;font-size:12px;line-height:1.3;color:var(--muted);min-height:1.2em;opacity:1;transition:opacity .2s ease;white-space:pre-line}
 #nodeControlsCard .node-ctrls__status--chain{text-transform:none;letter-spacing:normal}
 @media (max-width:1100px){
@@ -84,7 +84,7 @@
   #nodeControlsCard .node-ctrls__actions .btn{flex:1 1 120px}
   #nodeControlsCard .node-ctrls__btn--auto-apply,#nodeControlsCard .node-ctrls__btn--auto-disable{width:100%;min-width:0}
   #nodeControlsCard .node-ctrls__meta{grid-column:1/-1;justify-self:start;text-align:left;white-space:normal}
-  #nodeControlsCard .node-ctrls__row--chain{flex-wrap:wrap}
+  #nodeControlsCard .node-ctrls__row--chain{flex-wrap:wrap;align-items:flex-start}
   #nodeControlsCard .node-ctrls__field--chain{flex:1 1 100%;max-width:100%}
   #nodeControlsCard .node-ctrls__field--chain select{max-width:100%}
   #nodeControlsCard .node-ctrls__status--chain{text-align:left;text-transform:none;letter-spacing:normal}
