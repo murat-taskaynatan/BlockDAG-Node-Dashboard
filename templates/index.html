@@ -77,7 +77,7 @@
 #nodeControlsCard .node-ctrls__field--chain select{width:100%;min-width:0;max-width:460px}
 #nodeControlsCard .node-ctrls__actions--chain{display:flex;gap:8px;align-items:center;justify-content:flex-start;flex-wrap:nowrap;flex:0 0 auto}
 #nodeControlsCard .node-ctrls__actions--chain .btn{min-width:110px;flex:0 0 auto;white-space:nowrap}
-#nodeControlsCard .node-ctrls__status{display:block;font-size:12px;line-height:1.3;color:var(--muted);min-height:1.2em;opacity:1;transition:opacity .2s ease}
+#nodeControlsCard .node-ctrls__status{display:block;font-size:12px;line-height:1.3;color:var(--muted);min-height:1.2em;opacity:1;transition:opacity .2s ease;white-space:pre-line}
 #nodeControlsCard .node-ctrls__status--chain{text-transform:none;letter-spacing:normal}
 @media (max-width:1100px){
   #nodeControlsCard .node-ctrls__actions{flex-wrap:wrap}
@@ -340,6 +340,7 @@ const baseChartLabels = { peers: 'Peers', latency: 'RPC Latency (ms)' };
 const NODE_CTRL_REFRESH_MS = 10000;
 const nodeControlState = { enabled:false, hostMode:false, containers:[], nodes:[], activeNode:null, lastFetched:0, chainBackups:[], chainBackupsLastFetched:0, chainJob:null, chainEnabled:false, chainEnabledServer:false };
 let backupScanState = { message:'', ok:true };
+let backupScanTimer = null;
 let knownNodes = [];
 let currentNodeId = (localStorage.getItem('dashboard.nodeId') || '').trim();
 let nodeControlPendingMessage = null;
@@ -809,7 +810,20 @@ function setChainControlStatus(msg, ok = true){
 function setBackupScanStatus(msg, ok = true){
   const lowered = (msg || '').toLowerCase();
   backupScanState = { message: lowered, ok: !!ok };
-  setChainControlStatus(lowered, ok);
+  if (backupScanTimer){
+    clearTimeout(backupScanTimer);
+    backupScanTimer = null;
+  }
+  if (lowered){
+    setChainControlStatus(lowered, ok);
+    backupScanTimer = window.setTimeout(() => {
+      backupScanState = { message:'', ok:true };
+      setChainControlStatus('', true);
+      backupScanTimer = null;
+    }, 5000);
+  } else {
+    setChainControlStatus('', true);
+  }
 }
 
 function setChainControlButtonsDisabled(disabled){
@@ -1232,8 +1246,10 @@ function renderChainControls(){
       setChainControlStatus('Select a node with chain backups available.', false);
     } else if (backupScanState.message){
       setChainControlStatus(backupScanState.message, backupScanState.ok);
+    } else if (!hasBackups){
+      setChainControlStatus('no backups found.', false);
     } else {
-      setChainControlStatus(hasBackups ? 'Ready.' : 'No backups found.', hasBackups);
+      setChainControlStatus('', true);
     }
   }
 }
@@ -1349,7 +1365,7 @@ async function scanChainBackups(){
       summaryParts.push(`${locations.length} location${locations.length === 1 ? '' : 's'}`);
     }
     summaryParts.push(`${backups.length} backup${backups.length === 1 ? '' : 's'}`);
-    const summary = summaryParts.length ? ` (${summaryParts.join(', ')})` : '';
+    const summary = summaryParts.length ? `\n(${summaryParts.join(', ')})` : '';
     finalStatus = { text: `${baseMessage}${summary}`.trim(), ok: true };
     setBackupScanStatus(finalStatus.text, true);
   }catch(err){
