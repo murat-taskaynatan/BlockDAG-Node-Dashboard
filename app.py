@@ -81,6 +81,42 @@ def _find_first_existing(candidates: list[Path | None]) -> Path | None:
     return None
 
 
+def _collect_home_dirs(primary_home: Path | None = None) -> list[Path]:
+    homes: list[Path] = []
+    seen: set[str] = set()
+    candidates: list[Path | None] = []
+    if primary_home:
+        candidates.append(primary_home)
+    try:
+        env_home = Path(os.getenv("HOME")) if os.getenv("HOME") else None
+    except Exception:
+        env_home = None
+    if env_home:
+        candidates.append(env_home)
+    default_home = Path.home()
+    if not primary_home or primary_home != default_home:
+        candidates.append(default_home)
+    homes_root = Path("/home")
+    candidates.append(homes_root)
+    try:
+        if homes_root.exists():
+            for entry in homes_root.iterdir():
+                if entry.is_dir():
+                    candidates.append(entry)
+    except Exception:
+        pass
+    for candidate in candidates:
+        candidate = _normalize_path(candidate)
+        if not candidate or not candidate.exists():
+            continue
+        key = str(candidate)
+        if key in seen:
+            continue
+        seen.add(key)
+        homes.append(candidate)
+    return homes
+
+
 def _auto_discover_chain_paths():
     global CHAIN_DATA_DIR, CHAIN_BACKUP_DIR
     initial_data = CHAIN_DATA_DIR
@@ -146,36 +182,6 @@ def _auto_discover_chain_paths():
                     else:
                         _maybe_add_script_root(home_dir)
 
-    def _iter_home_dirs():
-        homes: list[Path] = []
-        seen_homes: set[str] = set()
-        preferred = [home]
-        try:
-            sys_home = Path(os.getenv("HOME")) if os.getenv("HOME") else None
-        except Exception:
-            sys_home = None
-        if sys_home:
-            preferred.append(sys_home)
-        homes_root = Path("/home")
-        if homes_root.exists():
-            preferred.append(homes_root)
-            try:
-                for entry in homes_root.iterdir():
-                    if entry.is_dir():
-                        preferred.append(entry)
-            except Exception:
-                pass
-        for candidate in preferred:
-            candidate = _normalize_path(candidate)
-            if not candidate or not candidate.exists():
-                continue
-            key = str(candidate)
-            if key in seen_homes:
-                continue
-            seen_homes.add(key)
-            homes.append(candidate)
-        return homes
-
     potential_roots = [
         script_root_from_data,
         script_root_from_backup,
@@ -186,7 +192,7 @@ def _auto_discover_chain_paths():
         Path("/opt"),
     ]
 
-    home_dirs = _iter_home_dirs()
+    home_dirs = _collect_home_dirs(home)
 
     for root in potential_roots:
         _add_root_variants(root, home_dirs)
@@ -2775,6 +2781,146 @@ def _chain_job_progress(message: str, details=None):
             _chain_job_state["details"] = current
 
 
+def _update_shared_chain_backup_dir(new_dir: Path | None) -> bool:
+    global SHARED_CHAIN_BACKUP_DIR
+    if not new_dir:
+        return False
+    resolved = _normalize_path(new_dir)
+    if not resolved:
+        return False
+    old = _normalize_path(SHARED_CHAIN_BACKUP_DIR)
+    try:
+        if old and resolved == old:
+            return False
+    except Exception:
+        if old and str(resolved) == str(old):
+            return False
+    SHARED_CHAIN_BACKUP_DIR = resolved
+    DEFAULT_NODE_SETTINGS["chain_backup_dir"] = str(resolved)
+    for ctx in NODES.values():
+        current = getattr(ctx, "chain_backup_dir", None)
+        current_path = _normalize_path(current)
+        same_as_old = False
+        if current_path is not None and old is not None:
+            try:
+                same_as_old = current_path == old
+            except Exception:
+                same_as_old = str(current_path) == str(old)
+        elif current is None and old is None:
+            same_as_old = True
+        if same_as_old or (current_path is None and old is None):
+            ctx.chain_backup_dir = resolved
+    if DEFAULT_NODE.chain_backup_dir != resolved:
+        DEFAULT_NODE.chain_backup_dir = resolved
+    _bind_default_node_globals()
+    return True
+
+
+def _scan_backup_locations(max_depth: int = 5) -> list[dict]:
+    prefix = f"{CHAIN_BACKUP_PREFIX}-" if CHAIN_BACKUP_PREFIX else ""
+    suffix = CHAIN_BACKUP_SUFFIX or ""
+    candidate_dirs: dict[str, Path] = {}
+    queue = deque()
+
+    def enqueue(path: Path | None, depth: int = 0):
+        path = _normalize_path(path)
+        if not path or not path.is_dir():
+            return
+        if path == Path("/home"):
+            return
+        queue.append((path, depth))
+
+    # Seed with known directories
+    for base in (
+        CHAIN_BACKUP_DIR,
+        SHARED_CHAIN_BACKUP_DIR,
+        _normalize_path(DEFAULT_NODE_SETTINGS.get("chain_backup_dir")),
+    ):
+        enqueue(base, 0)
+
+    home_dirs = _collect_home_dirs(Path.home())
+    for home_dir in home_dirs:
+        enqueue(home_dir, 0)
+        enqueue(home_dir / "blockdag", 1)
+        enqueue(home_dir / "blockdag-scripts", 1)
+        enqueue(home_dir / "backups", 1)
+        enqueue(home_dir / "blockdag-scripts" / "backups", 2)
+
+    visited: set[str] = set()
+    tokens = ("backup", "blockdag", "bdag", "node", "data", "scripts")
+
+    while queue:
+        current, depth = queue.popleft()
+        key = str(current)
+        if key in visited:
+            continue
+        visited.add(key)
+        name_lower = current.name.lower()
+        if any(token in name_lower for token in ("backup", "backups")):
+            candidate_dirs[key] = current
+        elif "blockdag" in name_lower or "bdag" in name_lower:
+            candidate_dirs[key] = current
+
+        if depth >= max_depth:
+            continue
+        try:
+            children = [child for child in current.iterdir() if child.is_dir() and not child.name.startswith(".")]
+        except Exception:
+            continue
+        for child in children:
+            child_lower = child.name.lower()
+            if depth < 1 or any(token in child_lower for token in tokens):
+                queue.append((child, depth + 1))
+
+    locations: list[dict] = []
+    for path in candidate_dirs.values():
+        try:
+            entries = list(path.iterdir())
+        except Exception:
+            continue
+        count = 0
+        latest_mtime = 0.0
+        latest_name = ""
+        total_size = 0
+        for entry in entries:
+            if not entry.is_file():
+                continue
+            name = entry.name
+            if prefix and not name.startswith(prefix):
+                continue
+            if suffix and not name.endswith(suffix):
+                continue
+            try:
+                stat = entry.stat()
+            except OSError:
+                continue
+            count += 1
+            total_size += stat.st_size
+            if stat.st_mtime > latest_mtime:
+                latest_mtime = stat.st_mtime
+                latest_name = name
+        if count == 0:
+            continue
+        try:
+            latest_dt = datetime.fromtimestamp(latest_mtime, timezone.utc)
+            latest_iso = latest_dt.isoformat()
+        except Exception:
+            latest_iso = None
+        locations.append({
+            "path": str(path.resolve()),
+            "count": count,
+            "latest": latest_iso,
+            "latest_name": latest_name,
+            "total_size": total_size,
+            "latest_ts": latest_mtime,
+        })
+
+    locations.sort(key=lambda item: item.get("latest_ts") or 0.0, reverse=True)
+    for item in locations:
+        item.pop("latest_ts", None)
+    return locations
+
+
 def _ensure_backup_dir():
     CHAIN_BACKUP_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -3375,6 +3521,49 @@ def api_chain_backups():
             "node": ctx.id,
         }
     return jsonify(payload)
+
+
+@app.post("/api/chain/backups/scan")
+def api_chain_backups_scan():
+    ctx = resolve_node_from_request()
+    with use_node_context(ctx):
+        if _chain_job_state.get("active"):
+            return jsonify({
+                "ok": False,
+                "error": "A chain backup job is currently running",
+                "job": _chain_job_snapshot(),
+                "node": ctx.id,
+            }), 409
+    locations = _scan_backup_locations()
+    if not locations:
+        return jsonify({
+            "ok": False,
+            "error": "No backups found under any home directory",
+            "locations": [],
+            "backups": [],
+            "node": ctx.id,
+        }), 404
+
+    selected_dir = Path(locations[0]["path"])
+    updated = _update_shared_chain_backup_dir(selected_dir)
+
+    with use_node_context(ctx):
+        backups = list_chain_backups()
+
+    message = f"Found backups in {selected_dir}"
+    if updated:
+        message += " (now selected)"
+    else:
+        message += " (already selected)"
+
+    return jsonify({
+        "ok": True,
+        "message": message,
+        "backup_dir": str(CHAIN_BACKUP_DIR),
+        "locations": locations,
+        "backups": backups,
+        "node": ctx.id,
+    })
 
 @app.route("/api/control", methods=["POST"])
 def api_control():

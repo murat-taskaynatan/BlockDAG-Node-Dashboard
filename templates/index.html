@@ -187,6 +187,7 @@
           <div class="node-ctrls__actions node-ctrls__actions--chain">
             <button class="btn" data-node-action="chain_restore" id="btnChainRestore" disabled>Restore Selected</button>
             <button class="btn" data-node-action="chain_delete" id="btnChainDelete" disabled>Delete Selected</button>
+            <button class="btn" data-node-action="chain_scan" id="btnChainScan" disabled>Scan Backups</button>
             <button class="btn" data-node-action="chain_backup" id="btnChainBackup" disabled>Backup Now</button>
             <button class="btn btn--danger" data-node-action="chain_cancel" id="btnChainCancel" disabled>Stop</button>
           </div>
@@ -1088,6 +1089,7 @@ function renderChainControls(){
   const backupBtn = document.getElementById('btnChainBackup');
   const restoreBtn = document.getElementById('btnChainRestore');
   const cancelBtn = document.getElementById('btnChainCancel');
+  let scanBtn = document.getElementById('btnChainScan');
   let deleteBtn = document.getElementById('btnChainDelete');
   if (!deleteBtn){
     const actions = document.querySelector('#nodeControlsCard .node-ctrls__actions--chain');
@@ -1106,7 +1108,24 @@ function renderChainControls(){
       });
     }
   }
-  if (!select || !backupBtn || !restoreBtn || !deleteBtn || !cancelBtn) return;
+  if (!scanBtn){
+    const actions = document.querySelector('#nodeControlsCard .node-ctrls__actions--chain');
+    if (actions){
+      const reference = document.getElementById('btnChainBackup');
+      scanBtn = document.createElement('button');
+      scanBtn.className = 'btn';
+      scanBtn.id = 'btnChainScan';
+      scanBtn.dataset.nodeAction = 'chain_scan';
+      scanBtn.textContent = 'Scan Backups';
+      scanBtn.disabled = true;
+      actions.insertBefore(scanBtn, reference || null);
+      scanBtn.addEventListener('click', ev => {
+        ev.preventDefault();
+        performNodeAction('chain_scan');
+      });
+    }
+  }
+  if (!select || !backupBtn || !restoreBtn || !deleteBtn || !cancelBtn || !scanBtn) return;
   const backups = Array.isArray(nodeControlState.chainBackups) ? nodeControlState.chainBackups : [];
   const job = nodeControlState.chainJob || null;
   const jobActive = !!(job && (job.active || job.status === 'running'));
@@ -1186,6 +1205,9 @@ function renderChainControls(){
     cancelBtn.disabled = jobCancelling;
     cancelBtn.textContent = jobCancelling ? 'Stopping…' : 'Stop';
     select.disabled = true;
+    if (scanBtn && scanBtn.dataset.busy !== '1'){
+      scanBtn.disabled = true;
+    }
   } else {
     const enabled = !!nodeControlState.chainEnabled;
     backupBtn.disabled = !enabled;
@@ -1193,6 +1215,9 @@ function renderChainControls(){
     deleteBtn.disabled = !enabled || !select.value || !hasBackups;
     cancelBtn.disabled = true;
     cancelBtn.textContent = 'Stop';
+    if (scanBtn && scanBtn.dataset.busy !== '1'){
+      scanBtn.disabled = false;
+    }
     if (job && (jobMessage || job.message)){
       setChainControlStatus(jobMessage || job.message, job.status !== 'error');
     } else if (!enabled){
@@ -1278,7 +1303,54 @@ async function refreshChainBackups(force = false){
   }
 }
 
+async function scanChainBackups(){
+  const scanBtn = document.getElementById('btnChainScan');
+  const originalText = scanBtn ? scanBtn.textContent : '';
+  const payload = {};
+  if (currentNodeId){
+    payload.node = currentNodeId;
+  }
+  try{
+    if (scanBtn){
+      scanBtn.disabled = true;
+      scanBtn.dataset.busy = '1';
+      scanBtn.textContent = 'Scanning…';
+    }
+    setChainControlStatus('Scanning for backups…', true);
+    const res = await fetch(withNodeParam('/api/chain/backups/scan'), {
+      method:'POST',
+      headers:{'content-type':'application/json'},
+      body: JSON.stringify(payload)
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || !data || data.ok === false){
+      throw new Error((data && data.error) || `HTTP ${res.status}`);
+    }
+    nodeControlState.chainBackups = Array.isArray(data?.backups) ? data.backups : [];
+    nodeControlState.chainBackupsLastFetched = Date.now();
+    renderChainControls();
+    const locations = Array.isArray(data?.locations) ? data.locations : [];
+    const fallbackPath = locations.length ? (locations[0]?.path || '') : '';
+    const message = (data.message || data.output || '').trim() || (fallbackPath ? `Found backups in ${fallbackPath}` : 'Backup scan complete.');
+    setChainControlStatus(message, true);
+  }catch(err){
+    const message = err && err.message ? err.message : String(err || 'Unknown error');
+    setChainControlStatus(`Backup scan failed: ${message}`, false);
+  }finally{
+    if (scanBtn){
+      scanBtn.disabled = false;
+      scanBtn.textContent = originalText || 'Scan Backups';
+      delete scanBtn.dataset.busy;
+    }
+    await refreshChainBackups(true);
+  }
+}
+
 async function performNodeAction(action){
+  if (action === 'chain_scan'){
+    await scanChainBackups();
+    return;
+  }
   const ACTION_MAP = {
     restart:'docker_restart',
     start:'docker_start',
