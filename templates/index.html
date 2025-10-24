@@ -99,7 +99,7 @@
 }
 #nodeControlStatus{min-height:1.2em;opacity:0;transition:opacity .2s ease}
 #nodeContainerDetails{opacity:.8;text-align:right}
-#ctlStatus{min-width:120px;display:inline-block;opacity:1}
+.chart-status{min-width:120px;display:inline-block;opacity:1}
   .activity-head{display:flex;flex-wrap:wrap;gap:16px;align-items:flex-start;margin-bottom:8px}
   .activity-head-col{flex:1 1 320px}
   .activity-head-col--controls{flex:1 1 280px}
@@ -235,7 +235,7 @@
               </select>
             </label>
             <button class="btn" id="btnApplyChartSettings">Apply</button>
-            <span class="sp" id="ctlStatus"></span>
+            <span class="sp chart-status" id="chartStatus"></span>
           </div>
         </div>
       </div>
@@ -2001,16 +2001,46 @@ async function preloadHistory(){
     console.warn('[history] preload failed:', err);
   }
 }
-function setCtlStatus(msg, ok=true){
-  const el = document.getElementById('ctlStatus');
+const chartStatusState = {
+  window: { msg:'', ok:true, timer:null },
+  history: { msg:'', ok:true, timer:null }
+};
+function updateChartStatus(){
+  const el = document.getElementById('chartStatus');
   if (!el) return;
-  el.textContent = msg || '';
-  el.style.color = ok ? '#25d366' : '#ff5370';
-  if (setCtlStatus._timer) clearTimeout(setCtlStatus._timer);
-  if (msg){
-    setCtlStatus._timer = setTimeout(()=>{ el.textContent = ''; }, 4000);
-  }
+  const parts = [];
+  const win = chartStatusState.window;
+  const hist = chartStatusState.history;
+  if (win.msg) parts.push(win.msg);
+  if (hist.msg) parts.push(hist.msg);
+  el.textContent = parts.join(' | ');
+  const overallOk = (!win.msg || win.ok) && (!hist.msg || hist.ok);
+  el.style.color = overallOk ? '#25d366' : '#ff5370';
+  if (!parts.length) el.textContent = '';
 }
+function setChartStatus(kind, msg, ok=true){
+  const entry = chartStatusState[kind];
+  if (!entry) return;
+  if (entry.timer) clearTimeout(entry.timer);
+  entry.msg = msg || '';
+  entry.ok = ok;
+  if (msg){
+    entry.timer = setTimeout(() => {
+      const target = chartStatusState[kind];
+      if (target){
+        target.msg = '';
+        target.ok = true;
+        target.timer = null;
+        updateChartStatus();
+      }
+    }, 4000);
+  } else {
+    entry.timer = null;
+  }
+  updateChartStatus();
+}
+const setWindowStatus = (msg, ok=true) => setChartStatus('window', msg, ok);
+const setHistoryStatus = (msg, ok=true) => setChartStatus('history', msg, ok);
 
 function syncSelectValue(select, value, labelFmt){
   if (!select || value === undefined || value === null) return;
@@ -2046,14 +2076,16 @@ async function loadChartConfig(){
       syncSelectValue(minutesInput, minutes, v => `${v} min`);
     }
   }catch(err){
-    setCtlStatus('Failed to load config', false);
+    const message = 'Failed to load config';
+    setWindowStatus(message, false);
+    setHistoryStatus(message, false);
   }
 }
 
 async function applyWindow(minutes){
   const value = Number(minutes);
   if (!Number.isFinite(value) || value < 1){
-    setCtlStatus('Enter minutes ≥ 1', false);
+    setWindowStatus('Enter minutes ≥ 1', false);
     return null;
   }
   const minutesInt = Math.round(value);
@@ -2064,14 +2096,14 @@ async function applyWindow(minutes){
   });
   const data = await res.json();
   if (!res.ok || !data.ok) throw new Error(data.error || 'set_window failed');
-  setCtlStatus(`Window set (${data.minutes || minutesInt} min)`);
+  setWindowStatus(`Window set (${data.minutes || minutesInt} min)`, true);
   return data;
 }
 
 async function applyHistory(points){
   const value = Number(points);
   if (!Number.isFinite(value) || value < 12){
-    setCtlStatus('History ≥ 12', false);
+    setHistoryStatus('History ≥ 12', false);
     return null;
   }
   const pointsInt = Math.round(value);
@@ -2082,7 +2114,7 @@ async function applyHistory(points){
   });
   const data = await res.json();
   if (!res.ok || !data.ok) throw new Error(data.error || 'set history failed');
-  setCtlStatus(`History set (${data.history_len || pointsInt})`);
+  setHistoryStatus(`History set (${data.history_len || pointsInt})`, true);
   return data;
 }
 
@@ -2099,7 +2131,9 @@ async function applyChartSettings(){
     await refreshCharts();
     await loadChartConfig();
   } catch(err) {
-    setCtlStatus(err.message || 'Apply failed', false);
+    const msg = err.message || 'Apply failed';
+    setWindowStatus(msg, false);
+    setHistoryStatus(msg, false);
   }
 }
 
