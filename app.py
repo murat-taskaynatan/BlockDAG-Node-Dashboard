@@ -48,6 +48,8 @@ APP_VERSION_DISPLAY = APP_VERSION
 HEIGHT_JUMP_THRESHOLD = int(os.getenv("DASH_HEIGHT_JUMP_THRESHOLD", "500"))
 ACTIVITY_JUMP_THRESHOLD = float(os.getenv("DASH_ACTIVITY_JUMP_THRESHOLD", "500"))
 RATE_SMOOTH_WINDOW_SEC = float(os.getenv("DASH_RATE_SMOOTH_WINDOW_SEC", "20"))
+REMOTE_JUMP_FAILSAFE_HEIGHT = int(os.getenv("DASH_REMOTE_JUMP_FAILSAFE_HEIGHT", "1000000"))
+REMOTE_JUMP_FAILSAFE_FACTOR = float(os.getenv("DASH_REMOTE_JUMP_FAILSAFE_FACTOR", "8"))
 
 CHAIN_DATA_DIR = Path(os.getenv("BDAG_CHAIN_DATA_DIR", "/home/blockdag/blockdag-scripts/bin/bdag/data")).expanduser().resolve()
 CHAIN_BACKUP_DIR = Path(os.getenv("BDAG_CHAIN_BACKUP_DIR", os.path.expanduser("~/backups"))).expanduser().resolve()
@@ -1822,7 +1824,16 @@ def sample_once():
     last_good_remote_height = int(globals().get("_last_good_remote_height", 0) or 0)
     if remote_height_val and remote_height_val > 0:
         if last_good_remote_height > 0 and remote_height_val > last_good_remote_height + HEIGHT_JUMP_THRESHOLD:
-            remote_height_val = last_good_remote_height
+            allow_large_jump = False
+            if remote_height_val >= REMOTE_JUMP_FAILSAFE_HEIGHT:
+                small_anchor = last_good_remote_height < REMOTE_JUMP_FAILSAFE_HEIGHT
+                large_factor = last_good_remote_height > 0 and remote_height_val >= last_good_remote_height * max(REMOTE_JUMP_FAILSAFE_FACTOR, 1.0)
+                if small_anchor or large_factor:
+                    allow_large_jump = True
+            if allow_large_jump:
+                last_good_remote_height = remote_height_val
+            else:
+                remote_height_val = last_good_remote_height
         else:
             last_good_remote_height = remote_height_val
     elif last_good_remote_height > 0:
