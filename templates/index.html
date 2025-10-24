@@ -63,7 +63,7 @@
 #nodeControlsCard .node-ctrls__field select{width:100%}
 #nodeControlsCard .node-ctrls__actions{display:flex;gap:8px;flex-wrap:nowrap}
 #nodeControlsCard .node-ctrls__actions .btn{flex:0 0 auto;min-width:110px;white-space:nowrap}
-#nodeControlsCard .node-ctrls__actions--chain .btn{min-width:110px;width:110px;flex:0 0 auto;white-space:nowrap;text-align:center;height:34px}
+#nodeControlsCard .node-ctrls__actions--chain .btn{min-width:140px;width:auto;flex:0 0 auto;white-space:nowrap;text-align:center}
 #nodeControlsCard .node-ctrls__field--auto input{width:100%;text-align:center}
 #nodeControlsCard .node-ctrls__meta{align-self:flex-start;text-align:left;margin:0;font-size:12px;line-height:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-height:1.2em;display:flex;align-items:center}
 #nodeControlsCard .node-ctrls__meta--status{grid-column:1/-1;margin-left:0;margin-top:2px;text-align:left;height:1.2em}
@@ -71,14 +71,16 @@
 #nodeControlsCard .node-ctrls__row--primary{gap:16px}
 #nodeControlsCard .node-ctrls__row--primary .node-ctrls__actions--container{flex:0 0 auto}
 #nodeControlsCard .node-ctrls__row--primary .node-ctrls__field--auto{flex:1 1 260px;min-width:200px;margin-left:20px}
-#nodeControlsCard .node-ctrls__row--chain{margin-top:2px;display:flex;gap:12px;align-items:stretch;flex-wrap:nowrap}
-#nodeControlsCard .node-ctrls__field--chain{display:flex;flex-direction:column;gap:4px;min-width:0;flex:1 1 460px;max-width:460px}
+#nodeControlsCard .node-ctrls__row--chain{margin-top:2px;display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap}
+#nodeControlsCard .node-ctrls__field--chain{display:flex;flex-direction:column;gap:4px;flex:1 1 285px;min-width:235px;max-width:285px}
 #nodeControlsCard .node-ctrls__field--chain span{opacity:.7}
-#nodeControlsCard .node-ctrls__field--chain select{width:100%;min-width:0;max-width:460px}
+#nodeControlsCard .node-ctrls__field--chain select{width:100%;min-width:0;max-width:285px;height:34px;padding:.35rem .6rem}
+#nodeControlsCard .chain-backup-select{height:34px;padding:.35rem .6rem;line-height:1.2;}
+#nodeControlsCard .node-ctrls__row--chain{margin-bottom:6px}
 #nodeControlsCard .node-ctrls__actions--chain{display:flex;gap:8px;align-items:center;justify-content:flex-start;flex-wrap:nowrap;flex:0 0 auto}
-#nodeControlsCard .node-ctrls__actions--chain .btn{min-width:110px;width:110px;flex:0 0 auto;white-space:nowrap}
+#nodeControlsCard .node-ctrls__actions--chain .btn{min-width:140px;width:auto;flex:0 0 auto;white-space:nowrap}
 #nodeControlsCard .node-ctrls__status{display:block;font-size:12px;line-height:1.3;color:var(--muted);min-height:1.2em;opacity:1;transition:opacity .2s ease}
-#nodeControlsCard .node-ctrls__status--chain{text-transform:none;letter-spacing:normal;display:block;height:1.2em}
+#nodeControlsCard .node-ctrls__status--chain{text-transform:none;letter-spacing:normal;display:block;height:1.2em;margin-top:2px;text-align:left}
 @media (max-width:1100px){
   #nodeControlsCard .node-ctrls__actions{flex-wrap:wrap}
   #nodeControlsCard .node-ctrls__actions .btn{flex:1 1 120px}
@@ -173,15 +175,14 @@
           </div>
         </div>
         </div>
-        <span class="node-ctrls__meta node-ctrls__meta--status" id="nodeControlStatus"></span>
+        <span class="node-ctrls__meta node-ctrls__meta--status" id="nodeControlStatus">&nbsp;</span>
         <span class="node-ctrls__meta" id="nodeContainerDetails"></span>
         <div class="node-ctrls__row node-ctrls__row--chain">
-          <label class="node-ctrls__field node-ctrls__field--chain">
+          <label class="node-ctrls__field node-ctrls__field--node node-ctrls__field--chain">
             <span>Chain backups</span>
-            <select id="chainBackupSelect" disabled>
+            <select class="chain-backup-select" id="chainBackupSelect" disabled>
               <option value="">Loading…</option>
             </select>
-            <span class="node-ctrls__status node-ctrls__status--chain" id="chainControlStatus">Chain controls unavailable</span>
           </label>
           <div class="node-ctrls__actions node-ctrls__actions--chain">
             <button class="btn" data-node-action="chain_restore" id="btnChainRestore" disabled>Restore Selected</button>
@@ -191,6 +192,7 @@
             <button class="btn btn--danger" data-node-action="chain_cancel" id="btnChainCancel" disabled>Stop</button>
           </div>
         </div>
+        <span class="node-ctrls__meta node-ctrls__meta--status node-ctrls__status node-ctrls__status--chain" id="chainControlStatus">Select a node with chain backups available.</span>
       </div>
     </div>
 
@@ -341,6 +343,15 @@ const NODE_CTRL_REFRESH_MS = 10000;
 const nodeControlState = { enabled:false, hostMode:false, containers:[], nodes:[], activeNode:null, lastFetched:0, chainBackups:[], chainBackupsLastFetched:0, chainJob:null, chainEnabled:false, chainEnabledServer:false };
 let backupScanState = { message:'', ok:true };
 let backupScanTimer = null;
+const BACKUP_STATUS_DEFAULT = '';
+
+function _showDefaultBackupStatus(){
+  if (backupScanTimer){
+    clearTimeout(backupScanTimer);
+    backupScanTimer = null;
+  }
+  setChainControlStatus('', true);
+}
 let knownNodes = [];
 let currentNodeId = (localStorage.getItem('dashboard.nodeId') || '').trim();
 let nodeControlPendingMessage = null;
@@ -808,21 +819,25 @@ function setChainControlStatus(msg, ok = true){
 }
 
 function setBackupScanStatus(msg, ok = true){
-  const lowered = (msg || '').toLowerCase();
-  backupScanState = { message: lowered, ok: !!ok };
+  const text = (msg || '').trim();
+  backupScanState = { message: text, ok: !!ok };
   if (backupScanTimer){
     clearTimeout(backupScanTimer);
     backupScanTimer = null;
   }
-  if (lowered){
-    setChainControlStatus(lowered, ok);
+  if (text){
+    setChainControlStatus(text, ok);
+    const pendingText = text;
     backupScanTimer = window.setTimeout(() => {
-      backupScanState = { message:'', ok:true };
-      setChainControlStatus('', true);
+      if (backupScanState.message === pendingText){
+        backupScanState = { message:'', ok:true };
+        _showDefaultBackupStatus();
+      }
       backupScanTimer = null;
-    }, 5000);
+    }, 6000);
   } else {
-    setChainControlStatus('', true);
+    backupScanState = { message:'', ok:true };
+    _showDefaultBackupStatus();
   }
 }
 
@@ -1218,7 +1233,8 @@ function renderChainControls(){
   }
   if (jobActive){
     backupScanState = { message:'', ok:true };
-    setChainControlStatus(jobMessage || job.message || `Chain ${jobType || 'operation'} in progress…`, job.status !== 'error');
+    const statusText = jobMessage || job.message || `Chain ${jobType || 'operation'} in progress…`;
+    setChainControlStatus(statusText, job.status !== 'error');
     backupBtn.disabled = true;
     restoreBtn.disabled = true;
     deleteBtn.disabled = true;
@@ -1240,16 +1256,17 @@ function renderChainControls(){
     }
     if (job && (jobMessage || job.message)){
       backupScanState = { message:'', ok:true };
-      setChainControlStatus(jobMessage || job.message, job.status !== 'error');
+      const statusText = jobMessage || job.message;
+      setChainControlStatus(statusText, job.status !== 'error');
     } else if (!enabled){
       backupScanState = { message:'', ok:true };
-      setChainControlStatus('Select a node with chain backups available.', false);
+      _showDefaultBackupStatus();
     } else if (backupScanState.message){
       setChainControlStatus(backupScanState.message, backupScanState.ok);
     } else if (!hasBackups){
-      setChainControlStatus('no backups found.', false);
+      setChainControlStatus('No backups found.', false);
     } else {
-      setChainControlStatus('', true);
+      _showDefaultBackupStatus();
     }
   }
 }
@@ -1575,11 +1592,14 @@ function wireNodeControls(){
         if (!res.ok || !data?.ok){
           throw new Error(data?.error || `HTTP ${res.status}`);
         }
+        const totalContainers = Array.isArray(data?.containers) ? data.containers.filter(c => c && c.status && !String(c.status).toLowerCase().startsWith('exited')).length : null;
         const addedCount = Array.isArray(data.added) ? data.added.length : 0;
         const removedCount = Array.isArray(data.removed) ? data.removed.length : 0;
         const updatedCount = Array.isArray(data.updated) ? data.updated.length : 0;
         await refreshNodeControls(true);
-        setNodeControlStatus(`Detected ${addedCount} container(s), removed ${removedCount}, updated ${updatedCount}.`, true);
+        const activeContainers = Array.isArray(nodeControlState.containers) ? nodeControlState.containers.filter(c => c && c.status && !String(c.status).toLowerCase().startsWith('exited')).length : 0;
+        const summaryParts = [`${activeContainers} active container${activeContainers === 1 ? '' : 's'}`, `added ${addedCount}`, `removed ${removedCount}`, `updated ${updatedCount}`];
+        setNodeControlStatus(`Scan complete: ${summaryParts.join(', ')}.`, true);
       }catch(err){
         console.warn('[node-controls] container scan failed', err);
         const message = err && err.message ? err.message : String(err || 'Unknown error');
@@ -2273,6 +2293,7 @@ function wireLogsPanel(){
 
 const pollMs = Number(window.POLL_INTERVAL || 2000) || 2000;
 (async () => {
+  _showDefaultBackupStatus();
   wireNodeControls();
   wireControls();
   wireLogsPanel();
