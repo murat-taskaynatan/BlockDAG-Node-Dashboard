@@ -1310,6 +1310,7 @@ async function scanChainBackups(){
   if (currentNodeId){
     payload.node = currentNodeId;
   }
+  let finalStatus = null;
   try{
     if (scanBtn){
       scanBtn.disabled = true;
@@ -1326,16 +1327,25 @@ async function scanChainBackups(){
     if (!res.ok || !data || data.ok === false){
       throw new Error((data && data.error) || `HTTP ${res.status}`);
     }
-    nodeControlState.chainBackups = Array.isArray(data?.backups) ? data.backups : [];
+    const backups = Array.isArray(data?.backups) ? data.backups : [];
+    const locations = Array.isArray(data?.locations) ? data.locations : [];
+    nodeControlState.chainBackups = backups;
     nodeControlState.chainBackupsLastFetched = Date.now();
     renderChainControls();
-    const locations = Array.isArray(data?.locations) ? data.locations : [];
     const fallbackPath = locations.length ? (locations[0]?.path || '') : '';
-    const message = (data.message || data.output || '').trim() || (fallbackPath ? `Found backups in ${fallbackPath}` : 'Backup scan complete.');
-    setChainControlStatus(message, true);
+    const baseMessage = (data.message || data.output || '').trim() || (fallbackPath ? `Found backups in ${fallbackPath}` : 'Backup scan complete.');
+    const summaryParts = [];
+    if (locations.length){
+      summaryParts.push(`${locations.length} location${locations.length === 1 ? '' : 's'}`);
+    }
+    summaryParts.push(`${backups.length} backup${backups.length === 1 ? '' : 's'}`);
+    const summary = summaryParts.length ? ` (${summaryParts.join(', ')})` : '';
+    finalStatus = { text: `${baseMessage}${summary}`.trim(), ok: true };
+    setChainControlStatus(finalStatus.text, true);
   }catch(err){
     const message = err && err.message ? err.message : String(err || 'Unknown error');
-    setChainControlStatus(`Backup scan failed: ${message}`, false);
+    finalStatus = { text: `Backup scan failed: ${message}`, ok: false };
+    setChainControlStatus(finalStatus.text, false);
   }finally{
     if (scanBtn){
       scanBtn.disabled = false;
@@ -1343,6 +1353,9 @@ async function scanChainBackups(){
       delete scanBtn.dataset.busy;
     }
     await refreshChainBackups(true);
+    if (finalStatus){
+      setChainControlStatus(finalStatus.text, finalStatus.ok);
+    }
   }
 }
 
