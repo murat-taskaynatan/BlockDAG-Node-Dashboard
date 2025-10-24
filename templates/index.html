@@ -54,7 +54,8 @@
 .auto-hours__suffix{font-size:11px;opacity:.75;text-transform:uppercase;letter-spacing:.06em;margin-right:4px}
 .node-ctrls label span{opacity:.7;font-size:11px;text-transform:uppercase;letter-spacing:.06em}
 .node-ctrls input{background:transparent;border:1px solid #3a4a7a;border-radius:.6rem;padding:.35rem .6rem;color:inherit}
-#nodeControlsCard .node-ctrls select{height:34px;line-height:1.2;width:100%;appearance:none;background-color:rgba(255,255,255,.06);border:1px solid #3a4a7a;border-radius:.6rem;padding:.35rem .6rem;color:var(--text);background-image:linear-gradient(45deg,transparent 50%,currentColor 50%),linear-gradient(135deg,currentColor 50%,transparent 50%);background-position:calc(100% - 18px) calc(50% - 3px),calc(100% - 12px) calc(50% - 3px);background-size:6px 6px;background-repeat:no-repeat;padding-right:1.8rem}
+.node-ctrls select{width:100%;appearance:none;background-color:rgba(255,255,255,.06);border:1px solid #3a4a7a;border-radius:.6rem;padding:.35rem .6rem;color:var(--text);background-image:linear-gradient(45deg,transparent 50%,currentColor 50%),linear-gradient(135deg,currentColor 50%,transparent 50%);background-position:calc(100% - 18px) calc(50% - 3px),calc(100% - 12px) calc(50% - 3px);background-size:6px 6px;background-repeat:no-repeat;padding-right:1.8rem}
+#nodeControlsCard .node-ctrls select{height:34px;line-height:1.2;}
 .node-ctrls select option{background-color:var(--card);color:var(--text)}
 #nodeControlsCard .node-ctrls--node{display:flex;flex-direction:column;gap:2px}
 #nodeControlsCard .node-ctrls__field{display:flex;flex-direction:column;gap:4px;min-width:0}
@@ -62,7 +63,7 @@
 #nodeControlsCard .node-ctrls__field span{opacity:.7}
 #nodeControlsCard .node-ctrls__field select{width:100%}
 #nodeControlsCard .node-ctrls__actions{display:flex;gap:8px;flex-wrap:nowrap}
-#nodeControlsCard .node-ctrls__actions .btn{flex:0 0 auto;min-width:110px;white-space:nowrap}
+#nodeControlsCard .node-ctrls__actions .btn{flex:0 0 auto;min-width:110px;white-space:nowrap;height:34px;display:flex;align-items:center;justify-content:center;padding:.35rem .6rem;line-height:1.2}
 #nodeControlsCard .node-ctrls__actions--chain .btn{min-width:140px;width:auto;flex:0 0 auto;white-space:nowrap;text-align:center}
 #nodeControlsCard .node-ctrls__field--auto input{width:100%;text-align:center}
 #nodeControlsCard .node-ctrls__meta{align-self:flex-start;text-align:left;margin:0;font-size:12px;line-height:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-height:1.2em;display:flex;align-items:center}
@@ -72,12 +73,12 @@
 #nodeControlsCard .node-ctrls__row--primary .node-ctrls__actions--container{flex:0 0 auto}
 #nodeControlsCard .node-ctrls__row--primary .node-ctrls__field--auto{flex:1 1 260px;min-width:200px;margin-left:20px}
 #nodeControlsCard .node-ctrls__row--chain{margin-top:2px;display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap}
-#nodeControlsCard .node-ctrls__field--chain{display:flex;flex-direction:column;gap:4px;flex:1 1 285px;min-width:235px;max-width:285px}
+#nodeControlsCard .node-ctrls__field--chain{display:flex;flex-direction:column;gap:4px;max-width:285px}
 #nodeControlsCard .node-ctrls__field--chain span{opacity:.7}
 #nodeControlsCard .node-ctrls__field--chain select{width:100%;min-width:0;max-width:285px;height:34px;padding:.35rem .6rem}
 #nodeControlsCard .chain-backup-select{height:34px;padding:.35rem .6rem;line-height:1.2;}
 #nodeControlsCard .node-ctrls__row--chain{margin-bottom:6px}
-#nodeControlsCard .node-ctrls__actions--chain{display:flex;gap:8px;align-items:center;justify-content:flex-start;flex-wrap:nowrap;flex:0 0 auto}
+#nodeControlsCard .node-ctrls__actions--chain{display:flex;gap:8px;align-items:center;justify-content:flex-start;flex-wrap:wrap}
 #nodeControlsCard .node-ctrls__actions--chain .btn{min-width:140px;width:auto;flex:0 0 auto;white-space:nowrap}
 #nodeControlsCard .node-ctrls__status{display:block;font-size:12px;line-height:1.3;color:var(--muted);min-height:1.2em;opacity:1;transition:opacity .2s ease}
 #nodeControlsCard .node-ctrls__status--chain{text-transform:none;letter-spacing:normal;display:block;height:1.2em;margin-top:2px;text-align:left}
