@@ -47,7 +47,7 @@ APP_VERSION = os.getenv("BDAG_DASH_VERSION", "v1.4.0-beta").strip() or "v1.4.0-b
 APP_VERSION_DISPLAY = APP_VERSION
 HEIGHT_JUMP_THRESHOLD = int(os.getenv("DASH_HEIGHT_JUMP_THRESHOLD", "500"))
 ACTIVITY_JUMP_THRESHOLD = float(os.getenv("DASH_ACTIVITY_JUMP_THRESHOLD", "500"))
-ACTIVITY_RATE_MAX = float(os.getenv("DASH_ACTIVITY_RATE_MAX", "100"))
+RATE_SMOOTH_WINDOW_SEC = float(os.getenv("DASH_RATE_SMOOTH_WINDOW_SEC", "20"))
 
 CHAIN_DATA_DIR = Path(os.getenv("BDAG_CHAIN_DATA_DIR", "/home/blockdag/blockdag-scripts/bin/bdag/data")).expanduser().resolve()
 CHAIN_BACKUP_DIR = Path(os.getenv("BDAG_CHAIN_BACKUP_DIR", os.path.expanduser("~/backups"))).expanduser().resolve()
@@ -1136,10 +1136,11 @@ def _activity_total_series_locked():
     return totals
 
 def _rate_series_from(labels, values):
+    count = min(len(labels), len(values))
     rates = []
+    ts_list = []
     prev_total = None
     prev_ts = None
-    count = min(len(labels), len(values))
     for idx in range(count):
         ts_raw = labels[idx]
         total_raw = values[idx]
@@ -1147,6 +1148,7 @@ def _rate_series_from(labels, values):
             ts_val = int(ts_raw)
         except Exception:
             ts_val = None
+        ts_list.append(ts_val)
         total_val = _finite(total_raw, 0.0)
         if ts_val is None or not math.isfinite(total_val):
             rates.append(0.0)
@@ -1160,11 +1162,32 @@ def _rate_series_from(labels, values):
             rate_val = delta / dt if dt > 0 else 0.0
             rates.append(max(_finite(rate_val, 0.0), 0.0))
         prev_total = total_val
-        if ts_val is not None:
-            prev_ts = ts_val
+        prev_ts = ts_val
     if len(labels) > count:
+        ts_list.extend([None] * (len(labels) - count))
         rates.extend([0.0] * (len(labels) - count))
-    return [float(r) if isinstance(r, (int, float)) else 0.0 for r in rates]
+    window_ms = int(max(RATE_SMOOTH_WINDOW_SEC, 0.0) * 1000.0)
+    if window_ms > 0 and count > 0:
+        smoothed = []
+        window = deque()
+        sum_rates = 0.0
+        for idx in range(len(rates)):
+            ts_val = ts_list[idx]
+            rate_val = rates[idx]
+            if ts_val is None:
+                window.clear()
+                sum_rates = 0.0
+                smoothed.append(0.0)
+                continue
+            window.append((ts_val, rate_val))
+            sum_rates += rate_val
+            cutoff = ts_val - window_ms
+            while window and window[0][0] < cutoff:
+                _, old_rate = window.popleft()
+                sum_rates -= old_rate
+            smoothed.append(sum_rates / len(window) if window else 0.0)
+        rates = smoothed
+    return [float(r) if isinstance(r, (int, float)) and math.isfinite(r) and r >= 0 else 0.0 for r in rates]
 
 lock = threading.Lock()
 
@@ -2289,8 +2312,6 @@ def chart_activity():
             pr = processed_rate[idx] if idx < len(processed_rate) else 0.0
             se = sealed_rate[idx] if idx < len(sealed_rate) else 0.0
             rate_val = max(_finite(m + pr + se, 0.0), 0.0)
-            if ACTIVITY_RATE_MAX > 0:
-                rate_val = min(rate_val, ACTIVITY_RATE_MAX)
             activity_rate.append(rate_val)
         sync_raw = (hist_payload.get("height_dx") or {}).get("series") or []
         if sync_raw:
@@ -2344,8 +2365,6 @@ def chart_activity():
                 pr = processed_rate[idx] if idx < len(processed_rate) else 0.0
                 se = sealed_rate[idx] if idx < len(sealed_rate) else 0.0
                 rate_val = max(_finite(m + pr + se, 0.0), 0.0)
-                if ACTIVITY_RATE_MAX > 0:
-                    rate_val = min(rate_val, ACTIVITY_RATE_MAX)
                 activity_rate.append(rate_val)
             if height_dx_series:
                 sync_rate = [max(_finite(height_dx_series[idx], 0.0), 0.0) if idx < len(height_dx_series) else 0.0 for idx in range(len(labels))]
@@ -2385,8 +2404,6 @@ def chart_activity():
         pr = processed_rate[idx] if idx < len(processed_rate) else 0.0
         se = sealed_rate[idx] if idx < len(sealed_rate) else 0.0
         rate_val = max(_finite(m + pr + se, 0.0), 0.0)
-        if ACTIVITY_RATE_MAX > 0:
-            rate_val = min(rate_val, ACTIVITY_RATE_MAX)
         activity_rate.append(rate_val)
     height_rate_map = {}
     if height_points:
