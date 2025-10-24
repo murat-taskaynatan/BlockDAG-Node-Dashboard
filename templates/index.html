@@ -807,6 +807,11 @@ function setChainControlStatus(msg, ok = true){
   el.style.opacity = msg ? 1 : 0;
 }
 
+function setBackupScanStatus(msg, ok = true){
+  setChainControlStatus(msg, ok);
+  setNodeControlStatus(msg, ok);
+}
+
 function setChainControlButtonsDisabled(disabled){
   document.querySelectorAll('#nodeControlsCard [data-node-action^="chain_"]').forEach(btn => {
     btn.disabled = !!disabled;
@@ -1317,7 +1322,7 @@ async function scanChainBackups(){
       scanBtn.dataset.busy = '1';
       scanBtn.textContent = 'Scanning…';
     }
-    setChainControlStatus('Scanning for backups…', true);
+    setBackupScanStatus('Scanning for backups…', true);
     const res = await fetch(withNodeParam('/api/chain/backups/scan'), {
       method:'POST',
       headers:{'content-type':'application/json'},
@@ -1341,11 +1346,11 @@ async function scanChainBackups(){
     summaryParts.push(`${backups.length} backup${backups.length === 1 ? '' : 's'}`);
     const summary = summaryParts.length ? ` (${summaryParts.join(', ')})` : '';
     finalStatus = { text: `${baseMessage}${summary}`.trim(), ok: true };
-    setChainControlStatus(finalStatus.text, true);
+    setBackupScanStatus(finalStatus.text, true);
   }catch(err){
     const message = err && err.message ? err.message : String(err || 'Unknown error');
     finalStatus = { text: `Backup scan failed: ${message}`, ok: false };
-    setChainControlStatus(finalStatus.text, false);
+    setBackupScanStatus(finalStatus.text, false);
   }finally{
     if (scanBtn){
       scanBtn.disabled = false;
@@ -1354,7 +1359,7 @@ async function scanChainBackups(){
     }
     await refreshChainBackups(true);
     if (finalStatus){
-      setChainControlStatus(finalStatus.text, finalStatus.ok);
+      setBackupScanStatus(finalStatus.text, finalStatus.ok);
     }
   }
 }
