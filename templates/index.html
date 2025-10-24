@@ -805,7 +805,8 @@ function setChainControlStatus(msg, ok = true){
 }
 
 function setBackupScanStatus(msg, ok = true){
-  setChainControlStatus(msg, ok);
+  const lowered = (msg || '').toLowerCase();
+  setChainControlStatus(lowered, ok);
 }
 
 function setChainControlButtonsDisabled(disabled){
