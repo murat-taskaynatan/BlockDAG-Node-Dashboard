@@ -783,14 +783,11 @@ function setNodeControlStatus(msg, ok = true){
   }
   el.style.opacity = 1;
   const lowered = (msg || '').toLowerCase();
-  const highlightRestart = lowered.includes('restart');
-  const highlightSetup = lowered.includes('setup complete');
-  const highlightStartStop = lowered.includes('start') || lowered.includes('stop');
-  if (!ok || highlightRestart || highlightSetup || highlightStartStop){
-    el.style.color = 'var(--bad)';
-  } else {
-    el.style.color = 'var(--muted)';
+  let color = 'var(--muted)';
+  if (!ok && (lowered.includes('fail') || lowered.includes('error') || lowered.includes('unable'))){
+    color = 'var(--bad)';
   }
+  el.style.color = color;
 }
 
 function setNodeControlButtonsDisabled(disabled){
@@ -814,7 +811,12 @@ function setChainControlStatus(msg, ok = true){
   const el = document.getElementById('chainControlStatus');
   if (!el) return;
   el.textContent = msg || '';
-  el.style.color = ok ? 'var(--muted)' : 'var(--bad)';
+  const lowered = (msg || '').toLowerCase();
+  let color = 'var(--muted)';
+  if (!ok && (lowered.includes('fail') || lowered.includes('error') || lowered.includes('unable'))){
+    color = 'var(--bad)';
+  }
+  el.style.color = color;
   el.style.opacity = msg ? 1 : 0;
 }
 
@@ -1264,7 +1266,7 @@ function renderChainControls(){
     } else if (backupScanState.message){
       setChainControlStatus(backupScanState.message, backupScanState.ok);
     } else if (!hasBackups){
-      setChainControlStatus('No backups found.', false);
+      setChainControlStatus('No backups found.', true);
     } else {
       _showDefaultBackupStatus();
     }
@@ -1483,7 +1485,7 @@ async function performNodeAction(action){
     statusMessage = container ? `Creating chain backup for ${container}` : 'Creating chain backup';
   } else if (action === 'chain_restore'){
     if (!backupSelect || !backupSelect.value){
-      setChainControlStatus('Select a backup to restore', false);
+      setChainControlStatus('Select a backup to restore', true);
       return;
     }
     payload.backup = backupSelect.value;
@@ -1499,7 +1501,7 @@ async function performNodeAction(action){
     backupSelect.disabled = true;
   } else if (action === 'chain_delete'){
     if (!backupSelect || !backupSelect.value){
-      setChainControlStatus('Select a backup to delete', false);
+      setChainControlStatus('Select a backup to delete', true);
       return;
     }
     payload.backup = backupSelect.value;
