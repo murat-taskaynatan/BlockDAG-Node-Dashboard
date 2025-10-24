@@ -341,7 +341,7 @@ const activitySeriesLabels = {
 };
 const baseChartLabels = { peers: 'Peers', latency: 'RPC Latency (ms)' };
 const NODE_CTRL_REFRESH_MS = 10000;
-const nodeControlState = { enabled:false, hostMode:false, containers:[], nodes:[], activeNode:null, lastFetched:0, chainBackups:[], chainBackupsLastFetched:0, chainJob:null, chainEnabled:false, chainEnabledServer:false };
+const nodeControlState = { enabled:false, hostMode:false, containers:[], nodes:[], activeNode:null, lastFetched:0, chainBackups:[], chainBackupsLastFetched:0, chainJob:null, chainEnabled:false, chainEnabledServer:false, renderedChainJobDigest:'' };
 let backupScanState = { message:'', ok:true };
 let backupScanTimer = null;
 let chainStatusTimer = null;
@@ -449,6 +449,7 @@ function setActiveNode(nodeId, opts = {}){
   currentNodeId = nodeId;
   try{ localStorage.setItem('dashboard.nodeId', nodeId); }catch(_){ }
   nodeControlState.activeNode = nodeId;
+  nodeControlState.renderedChainJobDigest = '';
   if (opts.skipRefresh) return;
   resetCharts();
   refreshStatus();
@@ -522,6 +523,25 @@ function buildChainJobMessage(job){
     return parts.join(' · ');
   }
   return job.message || '';
+}
+
+function chainJobDigest(job){
+  if (!job) return '';
+  const parts = [
+    job.type || '',
+    job.status || '',
+    job.message || '',
+    job.started || '',
+    job.ended || ''
+  ];
+  const details = job && typeof job.details === 'object' && job.details ? job.details : null;
+  if (details){
+    ['container','backup','path','target_container','job_container'].forEach(key => {
+      const value = details[key];
+      parts.push(value == null ? '' : String(value));
+    });
+  }
+  return parts.join('|');
 }
 
 const legendOffsetPlugin = {
@@ -1213,6 +1233,7 @@ function renderChainControls(){
   const jobType = jobActive ? job.type : (job ? job.type : '');
   const jobCancelling = !!(job && job.status === 'cancelling');
   const jobMessage = buildChainJobMessage(job);
+  const jobDigest = chainJobDigest(job);
   const restoreTarget = (jobActive && jobType === 'restore') ? (job.details && (job.details.backup || job.details.restored || job.details.path)) : '';
   const restoreLabel = restoreTarget ? (jobMessage || `Restoring ${formatBackupNameDisplay(restoreTarget)}`) : (jobMessage || 'Restoring backup');
   const previous = select.value;
@@ -1280,6 +1301,7 @@ function renderChainControls(){
     backupScanState = { message:'', ok:true };
     const statusText = jobMessage || job.message || `Chain ${jobType || 'operation'} in progress…`;
     setChainControlStatus(statusText, job.status !== 'error');
+    nodeControlState.renderedChainJobDigest = jobDigest || statusText || '';
     backupBtn.disabled = true;
     restoreBtn.disabled = true;
     deleteBtn.disabled = true;
@@ -1302,15 +1324,23 @@ function renderChainControls(){
     if (job && (jobMessage || job.message)){
       backupScanState = { message:'', ok:true };
       const statusText = jobMessage || job.message;
-      setChainControlStatus(statusText, job.status !== 'error');
+      const digest = jobDigest || statusText || '';
+      if (!digest || digest !== nodeControlState.renderedChainJobDigest){
+        setChainControlStatus(statusText, job.status !== 'error');
+        nodeControlState.renderedChainJobDigest = digest;
+      }
     } else if (!enabled){
       backupScanState = { message:'', ok:true };
+      nodeControlState.renderedChainJobDigest = '';
       _showDefaultBackupStatus();
     } else if (backupScanState.message){
+      nodeControlState.renderedChainJobDigest = '';
       setChainControlStatus(backupScanState.message, backupScanState.ok);
     } else if (!hasBackups){
+      nodeControlState.renderedChainJobDigest = '';
       setChainControlStatus('No backups found.', true);
     } else {
+      nodeControlState.renderedChainJobDigest = '';
       _showDefaultBackupStatus();
     }
   }

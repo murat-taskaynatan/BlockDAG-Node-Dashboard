@@ -73,7 +73,7 @@ sudo INSTALL_DIR=/srv/dashboard SERVICE_USER=flask \
 This script handles cloning and installation in one step—helpful for fresh hosts without the repo checked out.
 
 ```bash
-REPO_BRANCH=main \
+REPO_REF=v1.4.0-beta \
   ./install_from_github.sh
 ```
 
