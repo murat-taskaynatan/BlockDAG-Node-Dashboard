@@ -1465,8 +1465,9 @@ function wireNodeControls(){
         }
         const addedCount = Array.isArray(data.added) ? data.added.length : 0;
         const removedCount = Array.isArray(data.removed) ? data.removed.length : 0;
+        const updatedCount = Array.isArray(data.updated) ? data.updated.length : 0;
         await refreshNodeControls(true);
-        setNodeControlStatus(`Detected ${addedCount} container(s), removed ${removedCount}.`, true);
+        setNodeControlStatus(`Detected ${addedCount} container(s), removed ${removedCount}, updated ${updatedCount}.`, true);
       }catch(err){
         console.warn('[node-controls] container scan failed', err);
         const message = err && err.message ? err.message : String(err || 'Unknown error');

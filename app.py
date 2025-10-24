@@ -47,7 +47,7 @@ APP_VERSION = os.getenv("BDAG_DASH_VERSION", "v1.4.0-beta").strip() or "v1.4.0-b
 APP_VERSION_DISPLAY = APP_VERSION
 HEIGHT_JUMP_THRESHOLD = int(os.getenv("DASH_HEIGHT_JUMP_THRESHOLD", "500"))
 ACTIVITY_JUMP_THRESHOLD = float(os.getenv("DASH_ACTIVITY_JUMP_THRESHOLD", "500"))
-ACTIVITY_RATE_MAX = float(os.getenv("DASH_ACTIVITY_RATE_MAX", "200"))
+ACTIVITY_RATE_MAX = float(os.getenv("DASH_ACTIVITY_RATE_MAX", "100"))
 
 CHAIN_DATA_DIR = Path(os.getenv("BDAG_CHAIN_DATA_DIR", "/home/blockdag/blockdag-scripts/bin/bdag/data")).expanduser().resolve()
 CHAIN_BACKUP_DIR = Path(os.getenv("BDAG_CHAIN_BACKUP_DIR", os.path.expanduser("~/backups"))).expanduser().resolve()
@@ -2288,7 +2288,10 @@ def chart_activity():
             m = mined_rate[idx] if idx < len(mined_rate) else 0.0
             pr = processed_rate[idx] if idx < len(processed_rate) else 0.0
             se = sealed_rate[idx] if idx < len(sealed_rate) else 0.0
-            activity_rate.append(max(_finite(m + pr + se, 0.0), 0.0))
+            rate_val = max(_finite(m + pr + se, 0.0), 0.0)
+            if ACTIVITY_RATE_MAX > 0:
+                rate_val = min(rate_val, ACTIVITY_RATE_MAX)
+            activity_rate.append(rate_val)
         sync_raw = (hist_payload.get("height_dx") or {}).get("series") or []
         if sync_raw:
             sync_rate = [max(_finite(sync_raw[idx], 0.0), 0.0) if idx < len(sync_raw) else 0.0 for idx in range(len(labels))]
@@ -2340,7 +2343,10 @@ def chart_activity():
                 m = mined_rate[idx] if idx < len(mined_rate) else 0.0
                 pr = processed_rate[idx] if idx < len(processed_rate) else 0.0
                 se = sealed_rate[idx] if idx < len(sealed_rate) else 0.0
-                activity_rate.append(max(_finite(m + pr + se, 0.0), 0.0))
+                rate_val = max(_finite(m + pr + se, 0.0), 0.0)
+                if ACTIVITY_RATE_MAX > 0:
+                    rate_val = min(rate_val, ACTIVITY_RATE_MAX)
+                activity_rate.append(rate_val)
             if height_dx_series:
                 sync_rate = [max(_finite(height_dx_series[idx], 0.0), 0.0) if idx < len(height_dx_series) else 0.0 for idx in range(len(labels))]
             else:
@@ -2378,7 +2384,10 @@ def chart_activity():
         m = mined_rate[idx] if idx < len(mined_rate) else 0.0
         pr = processed_rate[idx] if idx < len(processed_rate) else 0.0
         se = sealed_rate[idx] if idx < len(sealed_rate) else 0.0
-        activity_rate.append(max(_finite(m + pr + se, 0.0), 0.0))
+        rate_val = max(_finite(m + pr + se, 0.0), 0.0)
+        if ACTIVITY_RATE_MAX > 0:
+            rate_val = min(rate_val, ACTIVITY_RATE_MAX)
+        activity_rate.append(rate_val)
     height_rate_map = {}
     if height_points:
         height_labels = [ts for ts,_ in height_points]
