@@ -7,9 +7,10 @@ import subprocess
 import sys
 import time
 from datetime import datetime, timezone
-from typing import Any, Dict, Tuple
+from typing import Any, Dict, Tuple, Optional
 import urllib.error
 import urllib.request
+from urllib.parse import urlparse
 
 STATE_DIR = os.getenv("BDAG_SIDECAR_STATE_DIR", "/var/lib/bdag-sidecar")
 STATE_PATH = os.path.join(STATE_DIR, "state.json")
@@ -26,6 +27,140 @@ PROCESSED_PATTERNS = [
     r"\bImported new chain segment\b",
 ]
 SEALED_PATTERNS = [r"\bsealed\b", r"\bblock\s+sealed\b"]
+
+
+DEFAULT_RPC_BASE = "http://127.0.0.1:18545"
+
+
+def _sanitize_host(value: str) -> str:
+    host = (value or "").strip()
+    if host in {"0.0.0.0", "*", "[::]", "::"}:
+        return "127.0.0.1"
+    return host or "127.0.0.1"
+
+
+def _rpc_base_from_url(url: str) -> Optional[str]:
+    raw = (url or "").strip()
+    if not raw:
+        return None
+    try:
+        parsed = urlparse(raw)
+    except Exception:
+        return None
+    if parsed.scheme not in {"http", "https"}:
+        return None
+    host = _sanitize_host(parsed.hostname)
+    port = parsed.port
+    if not host or not port:
+        return None
+    return f"{parsed.scheme}://{host}:{port}"
+
+
+def _parse_docker_env(env_list):
+    env = {}
+    for item in env_list or []:
+        if not item or "=" not in item:
+            continue
+        key, val = item.split("=", 1)
+        env[key] = val
+    return env
+
+
+def _resolve_container_rpc(info: Dict[str, Any], env: Dict[str, str]) -> Optional[str]:
+    for key in ("BDAG_RPC_BASE", "RPC_BASE"):
+        candidate = _rpc_base_from_url(env.get(key))
+        if candidate:
+            return candidate
+
+    for key in ("BDAG_RPC_URL", "RPC_URL"):
+        candidate = _rpc_base_from_url(env.get(key))
+        if candidate:
+            return candidate
+
+    node_args = env.get("NODE_ARGS", "")
+    host = _sanitize_host("127.0.0.1")
+    port = "18545"
+    if node_args:
+        addr_match = re.search(r"--http\.addr=([^\s]+)", node_args)
+        if addr_match:
+            host = _sanitize_host(addr_match.group(1))
+        port_match = re.search(r"--http\.port=([^\s]+)", node_args)
+        if port_match:
+            candidate_port = port_match.group(1).strip()
+            if candidate_port.isdigit():
+                port = candidate_port
+
+    network = info.get("NetworkSettings") or {}
+    ports = network.get("Ports") or {}
+    container_ports = [port, "18545", "8545"]
+    seen = set()
+    for container_port in container_ports:
+        if container_port in seen:
+            continue
+        seen.add(container_port)
+        key = f"{container_port}/tcp"
+        entries = ports.get(key) or []
+        entry = next((item for item in entries if item), None)
+        if not entry:
+            continue
+        host_port = (entry.get("HostPort") or "").strip()
+        host_ip = _sanitize_host(entry.get("HostIp"))
+        if host_port:
+            port = host_port
+        if host_ip:
+            host = host_ip
+        break
+
+    return f"http://{host}:{port}"
+
+
+def _inspect_container(name: str) -> Optional[Dict[str, Any]]:
+    if not name:
+        return None
+    try:
+        inspect = subprocess.run(
+            ["docker", "inspect", name],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return None
+    try:
+        payload = json.loads(inspect.stdout)
+    except Exception:
+        return None
+    if isinstance(payload, list) and payload:
+        return payload[0]
+    if isinstance(payload, dict):
+        return payload
+    return None
+
+
+def _determine_rpc_base() -> str:
+    direct = _rpc_base_from_url(os.getenv("BDAG_RPC_BASE"))
+    if direct:
+        return direct
+
+    for key in ("RPC_BASE",):
+        direct = _rpc_base_from_url(os.getenv(key))
+        if direct:
+            return direct
+
+    for key in ("BDAG_RPC_URL", "RPC_URL"):
+        direct = _rpc_base_from_url(os.getenv(key))
+        if direct:
+            return direct
+
+    container_name = (os.getenv("BDAG_NODE_CONTAINER") or ACTIVITY_CONTAINER or "").strip()
+    info = _inspect_container(container_name)
+    if info:
+        env = _parse_docker_env(info.get("Config", {}).get("Env"))
+        resolved = _resolve_container_rpc(info, env)
+        if resolved:
+            return resolved
+
+    return DEFAULT_RPC_BASE
 
 
 def _rpc(url, method):
@@ -212,7 +347,7 @@ def _collect_activity(state: Dict[str, Any]) -> Tuple[Dict[str, Any], Dict[str, 
 
 
 def gather_status():
-    node_url = os.getenv("BDAG_RPC_BASE", "http://127.0.0.1:18545").strip()
+    node_url = _determine_rpc_base()
     remote_url = os.getenv("BDAG_REMOTE_RPC_BASE", "https://rpc.awakening.bdagscan.com").strip()
 
     height = 0

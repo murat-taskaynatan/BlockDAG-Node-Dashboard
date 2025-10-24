@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from collections import deque, OrderedDict
 from flask import Flask, jsonify, render_template, request, abort
+from urllib.parse import urlparse
 
 APP_START = time.time()
 app = Flask(__name__, template_folder="templates", static_folder="static")
@@ -304,6 +305,13 @@ def _parse_docker_env(env_list):
     return env
 
 
+def _sanitize_host(value: str) -> str:
+    host = (value or "").strip()
+    if host in {"0.0.0.0", "*", "[::]", "::"}:
+        return "127.0.0.1"
+    return host or "127.0.0.1"
+
+
 _NODE_ARGS_HTTP_ADDR = re.compile(r"--http\.addr=([^\s]+)")
 _NODE_ARGS_HTTP_PORT = re.compile(r"--http\.port=([^\s]+)")
 
@@ -323,9 +331,54 @@ def _extract_node_args(node_args: str) -> tuple[str, str]:
         candidate = match.group(1).strip()
         if candidate.isdigit():
             port = candidate
-    if host in {"0.0.0.0", "*", "[::]"}:
-        host = "127.0.0.1"
-    return host, port
+    return _sanitize_host(host), port
+
+
+def _resolve_container_rpc_base(info: dict, env: dict) -> str:
+    node_args = env.get("NODE_ARGS", "")
+    host, port = _extract_node_args(node_args)
+
+    for key in ("BDAG_RPC_BASE", "RPC_BASE"):
+        candidate = (env.get(key) or "").strip()
+        if candidate:
+            return candidate
+
+    rpc_url = (env.get("BDAG_RPC_URL") or env.get("RPC_URL") or "").strip()
+    if rpc_url:
+        try:
+            parsed = urlparse(rpc_url)
+            if parsed.scheme in {"http", "https"}:
+                if parsed.hostname:
+                    host = _sanitize_host(parsed.hostname)
+                if parsed.port:
+                    port = str(parsed.port)
+        except Exception:
+            pass
+
+    network_info = info.get("NetworkSettings") or {}
+    ports = network_info.get("Ports") or {}
+    container_ports = []
+    if port:
+        container_ports.append(str(port))
+    for default_port in ("18545", "8545"):
+        if default_port not in container_ports:
+            container_ports.append(default_port)
+
+    for container_port in container_ports:
+        key = f"{container_port}/tcp"
+        entries = ports.get(key) or []
+        entry = next((item for item in entries or [] if item), None)
+        if not entry:
+            continue
+        host_port = (entry.get("HostPort") or "").strip()
+        host_ip = _sanitize_host(entry.get("HostIp"))
+        if host_port:
+            port = host_port
+        if host_ip:
+            host = host_ip
+        break
+
+    return f"http://{_sanitize_host(host)}:{port or '18545'}"
 
 
 def _discover_docker_nodes():
@@ -359,9 +412,7 @@ def _discover_docker_nodes():
             continue
 
         env = _parse_docker_env(info.get("Config", {}).get("Env"))
-        node_args = env.get("NODE_ARGS", "")
-        host, port = _extract_node_args(node_args)
-        rpc_base = f"http://{host}:{port}"
+        rpc_base = _resolve_container_rpc_base(info, env)
 
         data_dir = None
         for mount in info.get("Mounts", []):
@@ -388,13 +439,22 @@ def _discover_docker_nodes():
 
 def _augment_nodes_with_docker(nodes: "OrderedDict[str, NodeContext]"):
     added_ids = []
+    updated_ids = []
     discovered_containers = []
     existing_ids = set(nodes.keys())
     existing_containers = {ctx.container for ctx in nodes.values() if ctx.container}
+    existing_by_container = {ctx.container: ctx for ctx in nodes.values() if ctx.container}
     for meta in _discover_docker_nodes():
         container = meta.get("container")
         if container:
             discovered_containers.append(container)
+        if container and container in existing_by_container:
+            ctx = existing_by_container[container]
+            new_rpc = (meta.get("rpc_base") or "").strip()
+            if new_rpc and new_rpc != ctx.rpc_base:
+                ctx.rpc_base = new_rpc
+                updated_ids.append(ctx.id)
+            continue
         if container and container in existing_containers:
             continue
         base_id = meta.get("id") or _slugify(container)
@@ -420,12 +480,13 @@ def _augment_nodes_with_docker(nodes: "OrderedDict[str, NodeContext]"):
         existing_ids.add(ctx.id)
         if ctx.container:
             existing_containers.add(ctx.container)
+            existing_by_container[ctx.container] = ctx
         added_ids.append(ctx.id)
         try:
             app.logger.info("Auto-detected node %s (container %s)", ctx.id, ctx.container)
         except Exception:
             pass
-    return added_ids, discovered_containers
+    return added_ids, discovered_containers, updated_ids
 
 
 def _delete_node_state_record(node_id: str):
@@ -542,11 +603,11 @@ def _rebuild_node_mappings():
 
 def refresh_discovered_nodes():
     with _AUTO_NODE_LOCK:
-        added, discovered_containers = _augment_nodes_with_docker(NODES)
+        added, discovered_containers, updated = _augment_nodes_with_docker(NODES)
         removed = _prune_missing_autonodes(discovered_containers)
-        if added or removed:
+        if added or removed or updated:
             _rebuild_node_mappings()
-    return added, removed
+    return added, removed, updated
 
 
 def _load_node_configs():
@@ -2177,11 +2238,12 @@ def chart_latency():
 @app.route("/api/nodes/refresh", methods=["POST"])
 def api_nodes_refresh():
     try:
-        added, removed = refresh_discovered_nodes()
+        added, removed, updated = refresh_discovered_nodes()
         return jsonify({
             "ok": True,
             "added": list(added),
             "removed": list(removed),
+            "updated": list(updated),
             "count": len(NODES),
         })
     except Exception as exc:
@@ -3047,11 +3109,12 @@ def api_containers():
     host_mode = ENABLE_CONTROL and not ALLOW_DOCKER
     added = []
     removed = []
+    updated = []
     if ALLOW_DOCKER:
         try:
-            added, removed = refresh_discovered_nodes()
+            added, removed, updated = refresh_discovered_nodes()
         except Exception:
-            added, removed = [], []
+            added, removed, updated = [], [], []
     containers = docker_list() if ALLOW_DOCKER else []
     response = {
         "enabled": docker_enabled,
@@ -3063,6 +3126,7 @@ def api_containers():
         "default_container": ctx.container,
         "discovered": added,
         "pruned": removed,
+        "updated": updated,
     }
     return jsonify(response)
 
