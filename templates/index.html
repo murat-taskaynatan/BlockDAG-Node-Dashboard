@@ -1862,7 +1862,7 @@ async function refreshStatus(){
       const capitalize = value => value.replace(/[_-]+/g, ' ').replace(/(^|\s)\w/g, c => c.toUpperCase());
       const derivedStatus = (() => {
         if (labelRaw && labelRaw.toLowerCase() !== 'unknown'){
-          return labelRaw;
+          return capitalize(labelRaw.replace(/[._-]+/g, ' '));
         }
         if (code && code !== 'unknown'){
           return map[code] || capitalize(code);
