@@ -75,6 +75,15 @@ REMOTE_RPC_VERIFY = os.getenv("BDAG_REMOTE_RPC_VERIFY", "0") == "1"
 WALLET_ADDRESS = (os.getenv("BDAG_WALLET_ADDRESS") or os.getenv("MINING_ADDRESS") or "").strip()
 WALLET_BALANCE_CACHE_SEC = max(5.0, float(os.getenv("BDAG_WALLET_BALANCE_CACHE_SEC", "60")))
 WALLET_BALANCE_CACHE: dict[str, dict[str, object]] = {}
+APP_DIR = Path(__file__).resolve().parent
+DEFAULT_WALLET_FILES = [
+    Path(os.getenv("BDAG_WALLET_FILE", "")).expanduser() if os.getenv("BDAG_WALLET_FILE") else None,
+    APP_DIR / "wallet.txt",
+    APP_DIR.parent / "wallet.txt",
+    Path.home() / "wallet.txt",
+    Path.home() / "blockdag" / "wallet.txt",
+]
+_WALLET_FILE_CACHE = {"address": None, "checked": 0.0}
 MINING_STATE_SYNC_CONTAINER = os.getenv("BDAG_NODE_CONTAINER", "blockdag-testnet-network").strip()
 MINING_STATE_SYNC_CACHE_SEC = float(os.getenv("BDAG_MINING_STATE_SYNC_CACHE_SEC", "10"))
 DOCKER_BIN = shutil.which("docker") or ("/usr/bin/docker" if os.path.exists("/usr/bin/docker") else None)
@@ -1778,6 +1787,37 @@ def _format_wallet_bdag(wei: int | None) -> str | None:
     return text
 
 
+def _wallet_address_from_files(now: float | None = None) -> str | None:
+    global _WALLET_FILE_CACHE
+    if now is None:
+        now = time.time()
+    cache = _WALLET_FILE_CACHE
+    if cache.get("address") and (now - cache.get("checked", 0.0)) < 60:
+        return cache.get("address")
+    for candidate in DEFAULT_WALLET_FILES:
+        if not candidate:
+            continue
+        try:
+            path = Path(candidate).expanduser().resolve()
+        except Exception:
+            continue
+        if not path.exists() or not path.is_file():
+            continue
+        try:
+            with open(path, "r", encoding="utf-8") as fh:
+                for line in fh:
+                    addr = line.strip()
+                    if addr:
+                        cache["address"] = addr
+                        cache["checked"] = now
+                        return addr
+        except Exception:
+            continue
+    cache["address"] = None
+    cache["checked"] = now
+    return None
+
+
 def get_wallet_balance(address: str, force: bool = False) -> int | None:
     if not address:
         return None
@@ -1834,12 +1874,20 @@ def get_wallet_balance(address: str, force: bool = False) -> int | None:
         return cache.get("wei")
 
 
-def _wallet_payload(ctx: NodeContext | None, force: bool = False):
-    address = None
+def _resolve_wallet_address(ctx: NodeContext | None) -> str | None:
     if ctx and getattr(ctx, "wallet_address", None):
-        address = ctx.wallet_address
-    if not address and WALLET_ADDRESS:
-        address = WALLET_ADDRESS
+        addr = str(ctx.wallet_address).strip()
+        if addr:
+            return addr
+    if WALLET_ADDRESS:
+        addr = WALLET_ADDRESS.strip()
+        if addr:
+            return addr
+    return _wallet_address_from_files()
+
+
+def _wallet_payload(ctx: NodeContext | None, force: bool = False):
+    address = _resolve_wallet_address(ctx)
     if not address:
         return None
     wei_balance = get_wallet_balance(address, force=force)
