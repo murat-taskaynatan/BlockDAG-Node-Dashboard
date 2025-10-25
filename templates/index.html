@@ -11,9 +11,8 @@
   .card{background:var(--card);border-radius:16px;box-shadow:0 4px 18px rgba(0,0,0,.25);padding:16px}
   .title{font-weight:600;font-size:20px;margin-bottom:10px;display:flex;align-items:center;gap:10px}
   .grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;margin-top:16px}
-  .kvs{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:8px;margin-top:8px}
-  .kvs.node-stats{display:flex;flex-wrap:nowrap;gap:8px;overflow-x:auto}
-.kvs.node-stats .kv{flex:1 0 auto;min-width:0}
+.kvs{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:8px;margin-top:8px}
+.kvs.node-stats{display:grid;grid-template-columns:repeat(8,minmax(0,1fr));gap:8px}
   .kv{background:rgba(255,255,255,.04);border-radius:12px;padding:10px}
   .kv .k{color:var(--muted);font-size:12px}
   .kv .v{font-size:18px;margin-top:4px}
@@ -60,7 +59,7 @@
 .node-ctrls select option{background-color:var(--card);color:var(--text)}
 #nodeControlsCard .node-ctrls--node{display:flex;flex-direction:column;gap:2px}
 #nodeControlsCard .node-ctrls__field{display:flex;flex-direction:column;gap:4px;min-width:0}
-#nodeControlsCard .node-ctrls__field--node{flex:1 1 285px;min-width:235px;max-width:285px}
+#nodeControlsCard .node-ctrls__field--node{flex:1 1 305px;min-width:255px;max-width:305px}
 #nodeControlsCard .node-ctrls__field span{opacity:.7}
 #nodeControlsCard .node-ctrls__field select{width:100%}
 #nodeControlsCard .node-ctrls__actions{display:flex;gap:8px;flex-wrap:nowrap}
@@ -74,9 +73,9 @@
 #nodeControlsCard .node-ctrls__row--primary .node-ctrls__actions--container{flex:0 0 auto}
 #nodeControlsCard .node-ctrls__row--primary .node-ctrls__field--auto{flex:1 1 260px;min-width:200px;margin-left:20px}
 #nodeControlsCard .node-ctrls__row--chain{margin-top:-10px;display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap}
-#nodeControlsCard .node-ctrls__field--chain{display:flex;flex-direction:column;gap:4px;max-width:285px}
+#nodeControlsCard .node-ctrls__field--chain{display:flex;flex-direction:column;gap:4px;max-width:305px}
 #nodeControlsCard .node-ctrls__field--chain span{opacity:.7}
-#nodeControlsCard .node-ctrls__field--chain select{width:100%;min-width:0;max-width:285px;height:34px;padding:.35rem .6rem}
+#nodeControlsCard .node-ctrls__field--chain select{width:100%;min-width:0;max-width:305px;height:34px;padding:.35rem .6rem}
 #nodeControlsCard .chain-backup-select{height:34px;padding:.35rem .6rem;line-height:1.2;}
 #nodeControlsCard .node-ctrls__row--chain{margin-bottom:2px}
 #nodeControlsCard .node-ctrls__actions--chain{display:flex;gap:8px;align-items:center;justify-content:flex-start;flex-wrap:nowrap;flex:0 0 auto}
@@ -1832,8 +1831,10 @@ function renderActivityValue(activitySeries, syncSeries){
 }
 
 function fmtTime(ms){
-  const d = new Date(ms);
-  return d.toLocaleString();
+  const value = Number(ms);
+  const epochMs = value < 1e12 ? value * 1000 : value;
+  const d = new Date(epochMs);
+  return d.toLocaleTimeString([], { hour:'2-digit', minute:'2-digit', second:'2-digit' });
 }
 
 const LOG_LINES_LIMIT = 60;
@@ -1859,10 +1860,15 @@ async function refreshStatus(){
         healthy: 'Healthy',
         'healthy-ok': 'Healthy',
       };
-      const capitalize = value => value.replace(/[_-]+/g, ' ').replace(/(^|\s)\w/g, c => c.toUpperCase());
+      const cleanStatus = value => {
+        if (!value) return '';
+        const normalized = value.replace(/\./g, '_').replace(/[_-]+/g, ' ').trim();
+        return normalized;
+      };
+      const capitalize = value => cleanStatus(value).replace(/(^|\s)\w/g, c => c.toUpperCase());
       const derivedStatus = (() => {
         if (labelRaw && labelRaw.toLowerCase() !== 'unknown'){
-          return capitalize(labelRaw.replace(/[._-]+/g, ' '));
+          return capitalize(labelRaw);
         }
         if (code && code !== 'unknown'){
           return map[code] || capitalize(code);
