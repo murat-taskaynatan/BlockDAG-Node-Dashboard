@@ -2,7 +2,7 @@
   {
     "id": "primary",
     "label": "Primary Node",
-    "container": "blockdag-testnet-network",
+    "container": "",
     "rpc_base": "${BDAG_RPC_BASE:-http://127.0.0.1:18545}",
     "chain_data_dir": "${BDAG_CHAIN_DATA_DIR}",
     "chain_backup_dir": "${BDAG_CHAIN_BACKUP_DIR}"

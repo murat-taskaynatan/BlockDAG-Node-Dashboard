@@ -84,7 +84,7 @@ DEFAULT_WALLET_FILES = [
     Path.home() / "blockdag" / "wallet.txt",
 ]
 _WALLET_FILE_CACHE = {"address": None, "checked": 0.0}
-MINING_STATE_SYNC_CONTAINER = os.getenv("BDAG_NODE_CONTAINER", "blockdag-testnet-network").strip()
+MINING_STATE_SYNC_CONTAINER = os.getenv("BDAG_NODE_CONTAINER", "").strip()
 MINING_STATE_SYNC_CACHE_SEC = float(os.getenv("BDAG_MINING_STATE_SYNC_CACHE_SEC", "10"))
 DOCKER_BIN = shutil.which("docker") or ("/usr/bin/docker" if os.path.exists("/usr/bin/docker") else None)
 SYSTEMCTL_BIN = shutil.which("systemctl") or ("/usr/bin/systemctl" if os.path.exists("/usr/bin/systemctl") else None)
@@ -799,6 +799,7 @@ def _augment_nodes_with_docker(nodes: "OrderedDict[str, NodeContext]"):
     existing_ids = set(nodes.keys())
     existing_containers = {ctx.container for ctx in nodes.values() if ctx.container}
     existing_by_container = {ctx.container: ctx for ctx in nodes.values() if ctx.container}
+    placeholders = [ctx for ctx in nodes.values() if not getattr(ctx, "auto_discovered", False) and not (ctx.container or "").strip()]
     for meta in _discover_docker_nodes():
         container = meta.get("container")
         if container:
@@ -826,6 +827,40 @@ def _augment_nodes_with_docker(nodes: "OrderedDict[str, NodeContext]"):
                 updated_ids.append(ctx.id)
             continue
         if container and container in existing_containers:
+            continue
+        reusable = None
+        if placeholders:
+            reusable = placeholders.pop(0)
+        if reusable:
+            changed = False
+            new_rpc = (meta.get("rpc_base") or "").strip()
+            if new_rpc and new_rpc != reusable.rpc_base:
+                reusable.rpc_base = new_rpc
+                changed = True
+            if container and container != reusable.container:
+                reusable.container = container
+                changed = True
+            new_chain = _normalize_path(meta.get("chain_data_dir"))
+            if new_chain and new_chain != reusable.chain_data_dir:
+                reusable.chain_data_dir = new_chain
+                changed = True
+            new_backup = _normalize_path(meta.get("chain_backup_dir"))
+            if new_backup and new_backup.exists() and new_backup != reusable.chain_backup_dir:
+                reusable.chain_backup_dir = new_backup
+                changed = True
+            new_wallet = (meta.get("wallet_address") or "").strip()
+            if new_wallet and new_wallet.lower() != (reusable.wallet_address or "").lower():
+                reusable.wallet_address = new_wallet
+                changed = True
+            if container:
+                existing_containers.add(container)
+                existing_by_container[container] = reusable
+            if changed:
+                updated_ids.append(reusable.id)
+                try:
+                    app.logger.info("Assigned container %s to existing node %s", container, reusable.id)
+                except Exception:
+                    pass
             continue
         base_id = meta.get("id") or _slugify(container)
         candidate = base_id
