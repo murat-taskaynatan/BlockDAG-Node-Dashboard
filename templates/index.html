@@ -896,6 +896,11 @@ function setChainControlStatus(msg, ok = true){
   const el = document.getElementById('chainControlStatus');
   if (!el) return;
   const message = msg || '';
+  const lastMessage = el.dataset.lastMessage || '';
+  const lastOk = el.dataset.lastOk === 'true';
+  if (lastMessage === message && lastOk === !!ok){
+    return;
+  }
   el.textContent = message;
   const lowered = message.toLowerCase();
   let color = 'var(--muted)';
@@ -935,6 +940,8 @@ function setChainControlStatus(msg, ok = true){
       chainStatusTimer = null;
     }, 6000);
   }
+  el.dataset.lastMessage = message;
+  el.dataset.lastOk = ok ? 'true' : 'false';
 }
 
 function setBackupScanStatus(msg, ok = true){
