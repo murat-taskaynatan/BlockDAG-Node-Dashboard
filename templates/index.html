@@ -122,26 +122,6 @@
 .log-toggle-icon{display:inline-block;transition:transform .2s ease}
 .logs-card details[open] .log-toggle-icon{transform:rotate(0deg)}
 .logs-card details:not([open]) .log-toggle-icon{transform:rotate(-90deg)}
-.wallet-card{display:flex;flex-direction:column;gap:14px}
-.wallet-card details{display:block}
-.wallet-card summary{cursor:pointer;list-style:none;display:flex;align-items:center;justify-content:space-between;gap:12px;font-weight:600;font-size:18px;margin-bottom:8px}
-.wallet-card summary::-webkit-details-marker{display:none}
-.wallet-toggle-wrapper{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--muted)}
-.wallet-toggle-icon{display:inline-block;transition:transform .2s ease}
-.wallet-card details[open] .wallet-toggle-icon{transform:rotate(0deg)}
-.wallet-card details:not([open]) .wallet-toggle-icon{transform:rotate(-90deg)}
-.wallet-card__title{font-size:16px;font-weight:600;letter-spacing:.04em}
-.wallet-card__source{font-size:12px;opacity:.7;word-break:break-all;margin-bottom:6px;text-align:right}
-.wallet-card__body{display:grid;gap:10px}
-.wallet-card__tile{background:rgba(11,16,32,.65);border:1px solid rgba(255,255,255,.06);border-radius:12px;padding:14px;display:grid;gap:10px}
-.wallet-card__row{display:flex;align-items:center;justify-content:space-between;gap:16px}
-.wallet-card__row--muted .wallet-label{opacity:.55}
-.wallet-label{font-size:11px;text-transform:none;letter-spacing:.04em;opacity:.7}
-.wallet-value{font-size:14px;font-weight:500;text-align:right;word-break:break-word;color:rgba(255,255,255,.68)}
-.wallet-value--primary{font-size:14px;font-weight:500;color:rgba(255,255,255,.68)}
-.wallet-card__source,.wallet-value--address,.wallet-value--primary,.wallet-value,.wallet-label{color:inherit}
-.wallet-card__status{font-size:12px;opacity:.7}
-.wallet-card__status--error{color:#ff5370;opacity:1}
 </style>
 
 <div class="wrap">
@@ -288,36 +268,7 @@
       </details>
     </div>
 
-    <!-- Wallet Balance -->
-    <div class="card wallet-card" id="walletCard" hidden>
-      <details id="walletPanel">
-        <summary>
-          <span class="wallet-card__title">Wallet</span>
-          <span class="wallet-toggle-wrapper">
-            <span class="wallet-toggle-text">Hide</span>
-            <span class="wallet-toggle-icon" aria-hidden="true">▼</span>
-          </span>
-        </summary>
-        <div class="wallet-card__body">
-          <div class="wallet-card__source" id="walletSource"></div>
-          <div class="wallet-card__tile">
-            <div class="wallet-card__row">
-              <span class="wallet-label">Address:</span>
-              <span class="wallet-value wallet-value--address" id="walletAddress">—</span>
-            </div>
-            <div class="wallet-card__row">
-              <span class="wallet-label">Balance (BDAG):</span>
-              <span class="wallet-value wallet-value--primary" id="walletBalance">—</span>
-            </div>
-            <div class="wallet-card__row wallet-card__row--muted">
-              <span class="wallet-label">Updated:</span>
-              <span class="wallet-value" id="walletUpdated">—</span>
-            </div>
-          </div>
-        </div>
-        <span class="wallet-card__status" id="walletStatus"></span>
-      </details>
-    </div>
+    <!-- Wallet Balance (temporarily disabled) -->
 
   </div>
 </div>
@@ -1880,81 +1831,6 @@ function renderActivityValue(activitySeries, syncSeries){
   tag.textContent = `Activity ${fmt(activityLatest)} · Sync ${fmt(syncLatest)}`;
 }
 
-function updateWalletCard(wallet){
-  const card = document.getElementById('walletCard');
-  if (!card) return;
-  const panel = document.getElementById('walletPanel');
-  if (!wallet || !wallet.address){
-    card.hidden = true;
-    if (panel){
-      panel.open = false;
-      delete panel.dataset.initialized;
-      delete panel.dataset.userOpened;
-    }
-    const addressEl = document.getElementById('walletAddress');
-    if (addressEl){ addressEl.textContent = '—'; }
-    const balanceEl = document.getElementById('walletBalance');
-    if (balanceEl){ balanceEl.textContent = '—'; }
-    const updatedEl = document.getElementById('walletUpdated');
-    if (updatedEl){ updatedEl.textContent = '—'; }
-    const sourceEl = document.getElementById('walletSource');
-    if (sourceEl){ sourceEl.textContent = ''; sourceEl.hidden = true; }
-    const statusEl = document.getElementById('walletStatus');
-    if (statusEl){ statusEl.textContent = ''; statusEl.hidden = true; }
-    return;
-  }
-  card.hidden = false;
-  if (panel && !panel.dataset.initialized){
-    panel.open = false;
-    panel.dataset.initialized = '1';
-  }
-  const addressEl = document.getElementById('walletAddress');
-  if (addressEl){ addressEl.textContent = wallet.address || '—'; }
-  const balanceEl = document.getElementById('walletBalance');
-  if (balanceEl){ balanceEl.textContent = wallet.bdag || '—'; }
-  const updatedEl = document.getElementById('walletUpdated');
-  if (updatedEl){
-    updatedEl.textContent = wallet.updated_ts ? fmtTime(wallet.updated_ts) : '—';
-  }
-  const sourceEl = document.getElementById('walletSource');
-  if (sourceEl){
-    sourceEl.textContent = wallet.source ? `RPC URL: ${wallet.source}` : '';
-    sourceEl.hidden = !sourceEl.textContent;
-  }
-  const statusEl = document.getElementById('walletStatus');
-  if (statusEl){
-    if (wallet.error){
-      statusEl.textContent = `Error fetching balance: ${wallet.error}`;
-      statusEl.classList.add('wallet-card__status--error');
-      statusEl.hidden = false;
-    } else {
-      statusEl.textContent = '';
-      statusEl.classList.remove('wallet-card__status--error');
-      statusEl.hidden = true;
-    }
-  }
-}
-
-async function refreshWalletBalance(force = false){
-  const card = document.getElementById('walletCard');
-  if (!card) return;
-  try{
-    const url = withNodeParam(`/api/wallet${force ? '?force=1' : ''}`);
-    const res = await fetch(url, { cache:'no-store' });
-    if (!res.ok) throw new Error(res.status || 'wallet fetch failed');
-    const data = await res.json();
-    updateWalletCard(data?.wallet || null);
-  }catch(err){
-    console.warn('[wallet] refresh failed', err);
-    const statusEl = document.getElementById('walletStatus');
-    if (statusEl){
-      statusEl.textContent = `Error fetching balance: ${err?.message || err}`;
-      statusEl.classList.add('wallet-card__status--error');
-      statusEl.hidden = false;
-    }
-  }
-}
-
 function fmtTime(ms){
   const d = new Date(ms);
   return d.toLocaleString();
@@ -1966,7 +1842,6 @@ async function refreshStatus(){
   try{
     const r = await fetch(withNodeParam('/api/status'), {cache:'no-store'});
     const j = await r.json();
-    updateWalletCard(j.wallet || null);
     const pill = document.getElementById('healthLine');
     if (pill){
       const ns = j.node_state || {};
@@ -2097,7 +1972,6 @@ async function refreshStatus(){
       uptimeEl.textContent = Number.isFinite(uptime) ? formatDuration(uptime) : '—';
     }
   }catch(e){
-    updateWalletCard(null);
     const pill = document.getElementById('healthLine');
     if (pill){
       pill.textContent = 'Unavailable';
@@ -2499,20 +2373,6 @@ function wireLogsPanel(){
   update();
 }
 
-function wireWalletPanel(){
-  const panel = document.getElementById('walletPanel');
-  if (!panel) return;
-  const summary = panel.querySelector('summary');
-  const toggleText = summary ? summary.querySelector('.wallet-toggle-text') : null;
-  const icon = summary ? summary.querySelector('.wallet-toggle-icon') : null;
-  const update = () => {
-    const open = panel.open;
-    if (toggleText){ toggleText.textContent = open ? 'Hide' : 'Show'; }
-    if (icon){ icon.textContent = open ? '▼' : '▶'; }
-  };
-  panel.addEventListener('toggle', update);
-  update();
-}
 
 const pollMs = Number(window.POLL_INTERVAL || 2000) || 2000;
 (async () => {
@@ -2520,16 +2380,12 @@ const pollMs = Number(window.POLL_INTERVAL || 2000) || 2000;
   wireNodeControls();
   wireControls();
   wireLogsPanel();
-  wireWalletPanel();
   await loadChartConfig();
   await preloadHistory();
   await refreshNodeControls(true);
   await tick();
-  await refreshWalletBalance();
   await refreshLogs();
   setInterval(tick, pollMs);
-  const walletInterval = Math.max(60000, pollMs);
-  setInterval(() => { refreshWalletBalance(); }, walletInterval);
   const logsInterval = Math.max(5000, pollMs * 2);
   setInterval(refreshLogs, logsInterval);
 })();
