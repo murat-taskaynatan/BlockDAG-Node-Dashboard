@@ -5,6 +5,9 @@ from pathlib import Path
 from collections import deque, OrderedDict
 from flask import Flask, jsonify, render_template, request, abort
 from urllib.parse import urlparse
+from decimal import Decimal, ROUND_DOWN, getcontext
+
+getcontext().prec = 50
 
 APP_START = time.time()
 app = Flask(__name__, template_folder="templates", static_folder="static")
@@ -33,6 +36,7 @@ def _normalize_remote_url(url: str | None) -> str:
 
 PRIMARY_REMOTE_RPC_BASE = _normalize_remote_url("http://13.245.135.249:18545")
 LEGACY_REMOTE_RPC_BASES = [_normalize_remote_url("https://rpc.awakening.bdagscan.com")]
+WEI_PER_BDAG = Decimal("1e18")
 
 
 def _parse_remote_rpc_bases(raw) -> list[str]:
@@ -68,6 +72,9 @@ REMOTE_RPC_METHOD = os.getenv("BDAG_REMOTE_RPC_METHOD", "eth_blockNumber").strip
 REMOTE_RPC_TIMEOUT = float(os.getenv("BDAG_REMOTE_RPC_TIMEOUT", "2.5"))
 REMOTE_RPC_CACHE_SEC = float(os.getenv("BDAG_REMOTE_RPC_CACHE_SEC", "10"))
 REMOTE_RPC_VERIFY = os.getenv("BDAG_REMOTE_RPC_VERIFY", "0") == "1"
+WALLET_ADDRESS = (os.getenv("BDAG_WALLET_ADDRESS") or os.getenv("MINING_ADDRESS") or "").strip()
+WALLET_BALANCE_CACHE_SEC = max(5.0, float(os.getenv("BDAG_WALLET_BALANCE_CACHE_SEC", "60")))
+WALLET_BALANCE_CACHE: dict[str, dict[str, object]] = {}
 MINING_STATE_SYNC_CONTAINER = os.getenv("BDAG_NODE_CONTAINER", "blockdag-testnet-network").strip()
 MINING_STATE_SYNC_CACHE_SEC = float(os.getenv("BDAG_MINING_STATE_SYNC_CACHE_SEC", "10"))
 DOCKER_BIN = shutil.which("docker") or ("/usr/bin/docker" if os.path.exists("/usr/bin/docker") else None)
@@ -390,6 +397,7 @@ DEFAULT_NODE_SETTINGS = {
     "chain_backup_prefix": CHAIN_BACKUP_PREFIX,
     "chain_backup_suffix": CHAIN_BACKUP_SUFFIX,
     "chain_backup_max": CHAIN_BACKUP_MAX,
+    "wallet_address": WALLET_ADDRESS,
 }
 
 SHARED_CHAIN_BACKUP_DIR = Path(DEFAULT_NODE_SETTINGS["chain_backup_dir"]).expanduser().resolve()
@@ -428,6 +436,7 @@ class NodeContext:
         self.remote_rpc_timeout = float(merged.get("remote_rpc_timeout", DEFAULT_NODE_SETTINGS["remote_rpc_timeout"]))
         self.remote_rpc_cache_sec = float(merged.get("remote_rpc_cache_sec", DEFAULT_NODE_SETTINGS["remote_rpc_cache_sec"]))
         self.remote_rpc_verify = _coerce_bool(merged.get("remote_rpc_verify", DEFAULT_NODE_SETTINGS["remote_rpc_verify"]))
+        self.wallet_address = (merged.get("wallet_address") or merged.get("wallet") or "").strip() or WALLET_ADDRESS
 
         base_dir = CONFIG_BASE_DIR
         chain_data_raw = merged.get("chain_data_dir") or DEFAULT_NODE_SETTINGS["chain_data_dir"]
@@ -537,6 +546,7 @@ class NodeContext:
             "rpc_base": self.rpc_base,
             "remote_rpc_base": self.remote_rpc_base,
             "remote_rpc_bases": self.remote_rpc_bases[:],
+            "wallet_address": self.wallet_address,
             "chain_data_dir": str(self.chain_data_dir),
             "chain_backup_dir": str(self.chain_backup_dir),
         }
@@ -667,6 +677,7 @@ def _discover_docker_nodes():
 
         env = _parse_docker_env(info.get("Config", {}).get("Env"))
         rpc_base = _resolve_container_rpc_base(info, env)
+        wallet_address = (env.get("BDAG_WALLET_ADDRESS") or env.get("WALLET_ADDRESS") or env.get("MINING_ADDRESS") or "").strip()
 
         data_dir = None
         for mount in info.get("Mounts", []):
@@ -687,6 +698,7 @@ def _discover_docker_nodes():
             "rpc_base": rpc_base,
             "chain_data_dir": data_dir,
             "chain_backup_dir": str(SHARED_CHAIN_BACKUP_DIR),
+            "wallet_address": wallet_address,
         })
     return entries
 
@@ -950,6 +962,7 @@ _CONTEXT_SWAP_KEYS = (
     "REMOTE_RPC_TIMEOUT",
     "REMOTE_RPC_CACHE_SEC",
     "REMOTE_RPC_VERIFY",
+    "WALLET_ADDRESS",
     "MINING_STATE_SYNC_CONTAINER",
     "CHAIN_DATA_DIR",
     "CHAIN_BACKUP_DIR",
@@ -1000,6 +1013,7 @@ def _context_values_for(ctx: NodeContext):
         "REMOTE_RPC_TIMEOUT": ctx.remote_rpc_timeout,
         "REMOTE_RPC_CACHE_SEC": ctx.remote_rpc_cache_sec,
         "REMOTE_RPC_VERIFY": ctx.remote_rpc_verify,
+        "WALLET_ADDRESS": ctx.wallet_address,
         "MINING_STATE_SYNC_CONTAINER": ctx.container or DEFAULT_NODE_SETTINGS["container"],
         "CHAIN_DATA_DIR": ctx.chain_data_dir,
         "CHAIN_BACKUP_DIR": ctx.chain_backup_dir,
@@ -1045,6 +1059,9 @@ def _restore_context_from_globals(ctx: NodeContext):
         ctx.remote_rpc_bases = list(remote_bases)
         if ctx.remote_rpc_bases:
             ctx.remote_rpc_base = ctx.remote_rpc_bases[0]
+    wallet_addr = globals().get("WALLET_ADDRESS")
+    if wallet_addr:
+        ctx.wallet_address = wallet_addr
     ctx.activity_totals = globals().get("_ACTIVITY_TOTALS", ctx.activity_totals)
     ctx.activity_totals_last_ts = globals().get("_ACTIVITY_TOTALS_LAST_TS", ctx.activity_totals_last_ts)
     ctx.node_state_cache = globals().get("_NODE_STATE_CACHE", ctx.node_state_cache)
@@ -1115,6 +1132,7 @@ REMOTE_RPC_METHOD = DEFAULT_NODE.remote_rpc_method
 REMOTE_RPC_TIMEOUT = DEFAULT_NODE.remote_rpc_timeout
 REMOTE_RPC_CACHE_SEC = DEFAULT_NODE.remote_rpc_cache_sec
 REMOTE_RPC_VERIFY = DEFAULT_NODE.remote_rpc_verify
+WALLET_ADDRESS = DEFAULT_NODE.wallet_address or WALLET_ADDRESS
 MINING_STATE_SYNC_CONTAINER = DEFAULT_NODE.container or MINING_STATE_SYNC_CONTAINER
 CHAIN_DATA_DIR = DEFAULT_NODE.chain_data_dir
 CHAIN_BACKUP_DIR = DEFAULT_NODE.chain_backup_dir
@@ -1745,6 +1763,96 @@ def get_remote_height(force: bool = False):
             except Exception:
                 pass
         return cache.get("height")
+
+
+def _format_wallet_bdag(wei: int | None) -> str | None:
+    if wei is None:
+        return None
+    try:
+        bdag = (Decimal(wei) / WEI_PER_BDAG).quantize(Decimal("0.000001"), rounding=ROUND_DOWN)
+    except Exception:
+        return None
+    text = format(bdag, ",f")
+    if "." in text:
+        text = text.rstrip("0").rstrip(".")
+    return text
+
+
+def get_wallet_balance(address: str, force: bool = False) -> int | None:
+    if not address:
+        return None
+    key = address.lower()
+    cache = WALLET_BALANCE_CACHE.setdefault(key, {"ts": 0.0, "wei": None, "error": None, "base": None})
+    now = time.time()
+    if (
+        not force
+        and cache.get("wei") is not None
+        and (now - cache.get("ts", 0.0)) < WALLET_BALANCE_CACHE_SEC
+        and not cache.get("error")
+    ):
+        return cache.get("wei")
+    base = REMOTE_RPC_BASE or (REMOTE_RPC_BASES[0] if REMOTE_RPC_BASES else None)
+    if not base:
+        return cache.get("wei")
+    payload = {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "eth_getBalance",
+        "params": [address, "latest"],
+    }
+    try:
+        verify = REMOTE_RPC_VERIFY if base.startswith("https://") else False
+        resp = requests.post(
+            base,
+            json=payload,
+            timeout=REMOTE_RPC_TIMEOUT,
+            verify=verify,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        result = data.get("result")
+        if isinstance(result, str):
+            balance = int(result, 16) if result.startswith("0x") else int(result)
+        elif isinstance(result, (int, float)):
+            balance = int(result)
+        else:
+            raise ValueError(f"unexpected balance payload: {result!r}")
+        cache["wei"] = balance
+        cache["ts"] = now
+        cache["error"] = None
+        cache["base"] = base
+        return balance
+    except Exception as exc:
+        cache["ts"] = now
+        cache["error"] = str(exc)
+        if cache.get("base") is None:
+            cache["base"] = base
+        try:
+            app.logger.debug("Wallet balance fetch failed via %s: %s", base, exc)
+        except Exception:
+            pass
+        return cache.get("wei")
+
+
+def _wallet_payload(ctx: NodeContext | None, force: bool = False):
+    address = None
+    if ctx and getattr(ctx, "wallet_address", None):
+        address = ctx.wallet_address
+    if not address and WALLET_ADDRESS:
+        address = WALLET_ADDRESS
+    if not address:
+        return None
+    wei_balance = get_wallet_balance(address, force=force)
+    cache = WALLET_BALANCE_CACHE.get(address.lower(), {})
+    return {
+        "address": address,
+        "wei": str(wei_balance) if wei_balance is not None else None,
+        "wei_formatted": format(int(wei_balance), ",") if isinstance(wei_balance, int) else None,
+        "bdag": _format_wallet_bdag(wei_balance),
+        "updated_ts": int(cache.get("ts", 0.0) * 1000) if cache.get("ts") else None,
+        "source": cache.get("base") or (REMOTE_RPC_BASE or (REMOTE_RPC_BASES[0] if REMOTE_RPC_BASE else None)),
+        "error": cache.get("error"),
+    }
 
 
 def _mining_state_sync_from_compose():
@@ -2501,7 +2609,16 @@ def status():
     }
     payload["height_raw"] = int(raw_height_val or 0) if raw_height_val is not None else 0
     payload["peers_raw"] = int(raw_peers_val or 0) if raw_peers_val is not None else 0
+    payload["wallet"] = _wallet_payload(ctx)
     return jsonify(payload)
+
+@app.route("/api/wallet")
+def api_wallet():
+    ctx = resolve_node_from_request()
+    force = request.args.get("force") == "1"
+    with use_node_context(ctx):
+        wallet_payload = _wallet_payload(ctx, force=force)
+    return jsonify({"wallet": wallet_payload})
 
 @app.route("/api/chart/height")
 def chart_height():
