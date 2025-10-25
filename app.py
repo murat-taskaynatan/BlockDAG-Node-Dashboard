@@ -1700,59 +1700,51 @@ def get_node_uptime_sec(force: bool = False):
 
 def get_remote_height(force: bool = False):
     global REMOTE_RPC_BASE, REMOTE_RPC_BASES
-    bases = list(REMOTE_RPC_BASES) if REMOTE_RPC_BASES else ([REMOTE_RPC_BASE] if REMOTE_RPC_BASE else [])
-    if not bases:
+    base = REMOTE_RPC_BASE or (REMOTE_RPC_BASES[0] if REMOTE_RPC_BASES else None)
+    if not base:
         return None
     now = time.time()
     cache = _REMOTE_HEIGHT_CACHE
     if not force and (now - cache.get("ts", 0.0)) < max(1.0, REMOTE_RPC_CACHE_SEC):
         return cache.get("height")
     payload = {"jsonrpc": "2.0", "id": 1, "method": REMOTE_RPC_METHOD or "eth_blockNumber", "params": []}
-    last_error = None
-    for idx, base in enumerate(bases):
-        if not base:
-            continue
-        try:
-            verify = REMOTE_RPC_VERIFY if base.startswith("https://") else False
-            resp = requests.post(
-                base,
-                json=payload,
-                timeout=REMOTE_RPC_TIMEOUT,
-                verify=verify,
-            )
-            resp.raise_for_status()
-            data = resp.json()
-            result = data.get("result")
-            height = None
-            if isinstance(result, str) and result.startswith("0x"):
-                height = int(result, 16)
-            elif result is not None:
-                height = int(result)
-            cache["height"] = height
-            cache["ts"] = now
-            cache["error"] = None
-            cache["base"] = base
-            REMOTE_RPC_BASE = base
-            if REMOTE_RPC_BASES:
-                try:
-                    current_index = REMOTE_RPC_BASES.index(base)
-                except ValueError:
-                    REMOTE_RPC_BASES.insert(0, base)
-                else:
-                    if current_index != 0:
-                        REMOTE_RPC_BASES.insert(0, REMOTE_RPC_BASES.pop(current_index))
-            return height
-        except Exception as exc:
-            last_error = f"{base}: {exc}"
+    try:
+        verify = REMOTE_RPC_VERIFY if base.startswith("https://") else False
+        resp = requests.post(
+            base,
+            json=payload,
+            timeout=REMOTE_RPC_TIMEOUT,
+            verify=verify,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        result = data.get("result")
+        height = None
+        if isinstance(result, str) and result.startswith("0x"):
+            height = int(result, 16)
+        elif result is not None:
+            height = int(result)
+        if height is None or height <= 0:
+            raise ValueError(f"invalid remote height: {result!r}")
+        cache["height"] = height
+        cache["ts"] = now
+        cache["error"] = None
+        cache["base"] = base
+        REMOTE_RPC_BASE = base
+        if REMOTE_RPC_BASES:
+            REMOTE_RPC_BASES[0] = base
+        return height
+    except Exception as exc:
+        previous_error = cache.get("error")
+        error_message = f"{base}: {exc}"
+        cache["ts"] = now
+        cache["error"] = error_message
+        if previous_error != error_message:
             try:
-                if cache.get("error") != last_error:
-                    app.logger.warning("Remote height fetch failed via %s: %s", base, exc)
+                app.logger.warning("Remote height fetch failed via %s: %s", base, exc)
             except Exception:
                 pass
-            continue
-    cache["ts"] = now
-    cache["error"] = last_error
-    return cache.get("height")
+        return cache.get("height")
 
 
 def _mining_state_sync_from_compose():
@@ -3377,10 +3369,21 @@ def _chain_restore_task(container_name: str, backup_name: str):
         if proc.returncode != 0:
             raise RuntimeError(stderr.strip() or stdout.strip() or "Restore command failed")
         elapsed = time.time() - started_ts
-        size_bytes = _get_dir_size_bytes(CHAIN_DATA_DIR) if CHAIN_DATA_DIR.exists() else total_bytes
+        if total_bytes:
+            size_bytes = total_bytes
+            dir_size_bytes = _get_dir_size_bytes(CHAIN_DATA_DIR) if CHAIN_DATA_DIR.exists() else total_bytes
+        else:
+            dir_size_bytes = _get_dir_size_bytes(CHAIN_DATA_DIR) if CHAIN_DATA_DIR.exists() else 0
+            size_bytes = dir_size_bytes
         status = "success"
         message = f"Restored from {backup_name} ({_format_bytes(size_bytes)}, {elapsed:.1f}s)"
-        details.update({"restored": backup_name, "size": size_bytes, "elapsed": elapsed, "percent": 100.0})
+        details.update({
+            "restored": backup_name,
+            "size": size_bytes,
+            "dir_size": dir_size_bytes,
+            "elapsed": elapsed,
+            "percent": 100.0,
+        })
         if total_bytes and "total" not in details:
             details["total"] = total_bytes
         if temp_backup and temp_backup.exists():

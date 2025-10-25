@@ -267,6 +267,8 @@ def _load_state() -> Dict[str, Any]:
                 data.setdefault("totals", {"mined": 0, "processed": 0, "sealed": 0})
                 data.setdefault("last_iso", None)
                 data.setdefault("last_epoch", None)
+                data.setdefault("last_remote_height", 0)
+                data.setdefault("remote_rpc_base", None)
                 return data
     except Exception:
         pass
@@ -274,6 +276,8 @@ def _load_state() -> Dict[str, Any]:
         "last_iso": None,
         "last_epoch": None,
         "totals": {"mined": 0, "processed": 0, "sealed": 0},
+        "last_remote_height": 0,
+        "remote_rpc_base": None,
     }
 
 
@@ -387,13 +391,16 @@ def _collect_activity(state: Dict[str, Any]) -> Tuple[Dict[str, Any], Dict[str, 
 def gather_status():
     node_url = _determine_rpc_base()
     remote_candidates = _remote_rpc_candidates()
-    remote_url = remote_candidates[0]
+    remote_url = remote_candidates[0] if remote_candidates else ""
 
     height = 0
     peers = 0
     remote_height = 0
 
     state = _load_state()
+    last_remote_height = state.get("last_remote_height", 0)
+    if last_remote_height > 0:
+        remote_height = last_remote_height
 
     local_block = _rpc(node_url, os.getenv("BDAG_LOCAL_HEIGHT_METHOD", "eth_blockNumber"))
     if isinstance(local_block, dict):
@@ -408,19 +415,23 @@ def gather_status():
         peers = max(peers, _count_peers(peer_info))
 
     remote_method = os.getenv("BDAG_REMOTE_RPC_METHOD", "eth_blockNumber")
-    remote_height = 0
     remote_used = None
-    for candidate in remote_candidates:
+    if remote_candidates:
+        candidate = remote_candidates[0]
         resp = _rpc(candidate, remote_method)
         if isinstance(resp, dict):
-            remote_height = _parse_hex(resp.get("result"))
-            if remote_height > 0:
+            candidate_height = _parse_hex(resp.get("result"))
+            if candidate_height > 0:
+                remote_height = candidate_height
                 remote_used = candidate
-                break
-            if remote_used is None:
-                remote_used = candidate
-    if remote_used:
-        remote_url = remote_used
+                state["last_remote_height"] = remote_height
+                state["remote_rpc_base"] = candidate
+        if remote_used:
+            remote_url = remote_used
+        else:
+            remote_url = state.get("remote_rpc_base", remote_url)
+    else:
+        remote_url = state.get("remote_rpc_base", remote_url)
 
     activity_payload, updated_state = _collect_activity(state)
     if updated_state != state:
