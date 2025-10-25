@@ -22,7 +22,48 @@ CHART_CONFIG={'timeframe_sec':60,'history_len':240}
 RPC_BASE = os.getenv("BDAG_RPC_BASE", "http://127.0.0.1:18545")
 RPC_USER = os.getenv("BDAG_RPC_USER", "")
 RPC_PASS = os.getenv("BDAG_RPC_PASS", "")
-REMOTE_RPC_BASE = os.getenv("BDAG_REMOTE_RPC_BASE", "https://rpc.awakening.bdagscan.com").strip()
+
+
+def _normalize_remote_url(url: str | None) -> str:
+    text = (url or "").strip()
+    if text and "://" not in text:
+        text = f"http://{text}"
+    return text.rstrip("/")
+
+
+PRIMARY_REMOTE_RPC_BASE = _normalize_remote_url("http://13.245.135.249:18545")
+LEGACY_REMOTE_RPC_BASES = [_normalize_remote_url("https://rpc.awakening.bdagscan.com")]
+
+
+def _parse_remote_rpc_bases(raw) -> list[str]:
+    if raw is None:
+        return []
+    if isinstance(raw, (list, tuple, set)):
+        items = [str(item).strip() for item in raw]
+    else:
+        items = [part.strip() for part in str(raw).split(",")]
+    bases = []
+    for item in items:
+        normalized = _normalize_remote_url(item)
+        if normalized and normalized not in bases:
+            bases.append(normalized)
+    if bases:
+        has_primary = PRIMARY_REMOTE_RPC_BASE in bases
+        has_legacy = any(base in LEGACY_REMOTE_RPC_BASES for base in bases)
+        if has_legacy and not has_primary:
+            bases.insert(0, PRIMARY_REMOTE_RPC_BASE)
+    return bases
+
+
+DEFAULT_REMOTE_RPC_BASES = [
+    PRIMARY_REMOTE_RPC_BASE,
+    _normalize_remote_url("https://rpc.bdagscan.com"),
+    *[base for base in LEGACY_REMOTE_RPC_BASES if base != PRIMARY_REMOTE_RPC_BASE],
+]
+
+ENV_REMOTE_RPC_BASES = _parse_remote_rpc_bases(os.getenv("BDAG_REMOTE_RPC_BASES", os.getenv("BDAG_REMOTE_RPC_BASE")))
+REMOTE_RPC_BASES = ENV_REMOTE_RPC_BASES or DEFAULT_REMOTE_RPC_BASES[:]
+REMOTE_RPC_BASE = REMOTE_RPC_BASES[0]
 REMOTE_RPC_METHOD = os.getenv("BDAG_REMOTE_RPC_METHOD", "eth_blockNumber").strip() or "eth_blockNumber"
 REMOTE_RPC_TIMEOUT = float(os.getenv("BDAG_REMOTE_RPC_TIMEOUT", "2.5"))
 REMOTE_RPC_CACHE_SEC = float(os.getenv("BDAG_REMOTE_RPC_CACHE_SEC", "10"))
@@ -339,6 +380,7 @@ DEFAULT_NODE_SETTINGS = {
     "rpc_user": RPC_USER,
     "rpc_pass": RPC_PASS,
     "remote_rpc_base": REMOTE_RPC_BASE,
+    "remote_rpc_bases": REMOTE_RPC_BASES[:],
     "remote_rpc_method": REMOTE_RPC_METHOD,
     "remote_rpc_timeout": REMOTE_RPC_TIMEOUT,
     "remote_rpc_cache_sec": REMOTE_RPC_CACHE_SEC,
@@ -376,7 +418,12 @@ class NodeContext:
         self.rpc_base = merged.get("rpc_base") or DEFAULT_NODE_SETTINGS["rpc_base"]
         self.rpc_user = merged.get("rpc_user") or ""
         self.rpc_pass = merged.get("rpc_pass") or ""
-        self.remote_rpc_base = merged.get("remote_rpc_base") or DEFAULT_NODE_SETTINGS["remote_rpc_base"]
+        remote_base_sources = merged.get("remote_rpc_bases") if "remote_rpc_bases" in merged else merged.get("remote_rpc_base")
+        remote_candidates = _parse_remote_rpc_bases(remote_base_sources)
+        if not remote_candidates:
+            remote_candidates = _parse_remote_rpc_bases(DEFAULT_NODE_SETTINGS.get("remote_rpc_bases")) or [DEFAULT_NODE_SETTINGS["remote_rpc_base"]]
+        self.remote_rpc_bases = remote_candidates
+        self.remote_rpc_base = remote_candidates[0]
         self.remote_rpc_method = merged.get("remote_rpc_method") or DEFAULT_NODE_SETTINGS["remote_rpc_method"]
         self.remote_rpc_timeout = float(merged.get("remote_rpc_timeout", DEFAULT_NODE_SETTINGS["remote_rpc_timeout"]))
         self.remote_rpc_cache_sec = float(merged.get("remote_rpc_cache_sec", DEFAULT_NODE_SETTINGS["remote_rpc_cache_sec"]))
@@ -488,6 +535,8 @@ class NodeContext:
             "label": self.label,
             "container": self.container,
             "rpc_base": self.rpc_base,
+            "remote_rpc_base": self.remote_rpc_base,
+            "remote_rpc_bases": self.remote_rpc_bases[:],
             "chain_data_dir": str(self.chain_data_dir),
             "chain_backup_dir": str(self.chain_backup_dir),
         }
@@ -739,7 +788,7 @@ def _prune_missing_autonodes(active_containers):
 
 
 def _bind_default_node_globals():
-    global RPC_BASE, RPC_USER, RPC_PASS, REMOTE_RPC_BASE, REMOTE_RPC_METHOD
+    global RPC_BASE, RPC_USER, RPC_PASS, REMOTE_RPC_BASE, REMOTE_RPC_BASES, REMOTE_RPC_METHOD
     global REMOTE_RPC_TIMEOUT, REMOTE_RPC_CACHE_SEC, REMOTE_RPC_VERIFY
     global MINING_STATE_SYNC_CONTAINER, CHAIN_DATA_DIR, CHAIN_BACKUP_DIR
     global CHAIN_BACKUP_PREFIX, CHAIN_BACKUP_SUFFIX, CHAIN_BACKUP_MAX
@@ -750,7 +799,8 @@ def _bind_default_node_globals():
     RPC_BASE = DEFAULT_NODE.rpc_base
     RPC_USER = DEFAULT_NODE.rpc_user
     RPC_PASS = DEFAULT_NODE.rpc_pass
-    REMOTE_RPC_BASE = DEFAULT_NODE.remote_rpc_base
+    REMOTE_RPC_BASES = list(getattr(DEFAULT_NODE, "remote_rpc_bases", [DEFAULT_NODE.remote_rpc_base])) or [DEFAULT_NODE.remote_rpc_base]
+    REMOTE_RPC_BASE = REMOTE_RPC_BASES[0]
     REMOTE_RPC_METHOD = DEFAULT_NODE.remote_rpc_method
     REMOTE_RPC_TIMEOUT = DEFAULT_NODE.remote_rpc_timeout
     REMOTE_RPC_CACHE_SEC = DEFAULT_NODE.remote_rpc_cache_sec
@@ -895,6 +945,7 @@ _CONTEXT_SWAP_KEYS = (
     "RPC_USER",
     "RPC_PASS",
     "REMOTE_RPC_BASE",
+    "REMOTE_RPC_BASES",
     "REMOTE_RPC_METHOD",
     "REMOTE_RPC_TIMEOUT",
     "REMOTE_RPC_CACHE_SEC",
@@ -944,6 +995,7 @@ def _context_values_for(ctx: NodeContext):
         "RPC_USER": ctx.rpc_user,
         "RPC_PASS": ctx.rpc_pass,
         "REMOTE_RPC_BASE": ctx.remote_rpc_base,
+        "REMOTE_RPC_BASES": ctx.remote_rpc_bases[:],
         "REMOTE_RPC_METHOD": ctx.remote_rpc_method,
         "REMOTE_RPC_TIMEOUT": ctx.remote_rpc_timeout,
         "REMOTE_RPC_CACHE_SEC": ctx.remote_rpc_cache_sec,
@@ -988,6 +1040,11 @@ def _context_values_for(ctx: NodeContext):
 
 
 def _restore_context_from_globals(ctx: NodeContext):
+    remote_bases = globals().get("REMOTE_RPC_BASES")
+    if remote_bases:
+        ctx.remote_rpc_bases = list(remote_bases)
+        if ctx.remote_rpc_bases:
+            ctx.remote_rpc_base = ctx.remote_rpc_bases[0]
     ctx.activity_totals = globals().get("_ACTIVITY_TOTALS", ctx.activity_totals)
     ctx.activity_totals_last_ts = globals().get("_ACTIVITY_TOTALS_LAST_TS", ctx.activity_totals_last_ts)
     ctx.node_state_cache = globals().get("_NODE_STATE_CACHE", ctx.node_state_cache)
@@ -1052,7 +1109,8 @@ def use_node_context(ctx: NodeContext, *, hold_lock: bool = True):
 RPC_BASE = DEFAULT_NODE.rpc_base
 RPC_USER = DEFAULT_NODE.rpc_user
 RPC_PASS = DEFAULT_NODE.rpc_pass
-REMOTE_RPC_BASE = DEFAULT_NODE.remote_rpc_base
+REMOTE_RPC_BASES = list(getattr(DEFAULT_NODE, "remote_rpc_bases", [DEFAULT_NODE.remote_rpc_base])) or [DEFAULT_NODE.remote_rpc_base]
+REMOTE_RPC_BASE = REMOTE_RPC_BASES[0]
 REMOTE_RPC_METHOD = DEFAULT_NODE.remote_rpc_method
 REMOTE_RPC_TIMEOUT = DEFAULT_NODE.remote_rpc_timeout
 REMOTE_RPC_CACHE_SEC = DEFAULT_NODE.remote_rpc_cache_sec
@@ -1580,7 +1638,7 @@ def get_block_height():
     return try_methods(["dag_blockNumber","bdag_blockNumber","eth_blockNumber","getblockcount"])
 
 
-_REMOTE_HEIGHT_CACHE = {"ts": 0.0, "height": None, "error": None}
+_REMOTE_HEIGHT_CACHE = {"ts": 0.0, "height": None, "error": None, "base": None}
 _MINING_STATE_SYNC_CACHE = {"ts": 0.0, "value": None, "error": None}
 _NODE_UPTIME_CACHE = {"start_ts": None, "checked": 0.0}
 
@@ -1641,37 +1699,60 @@ def get_node_uptime_sec(force: bool = False):
 
 
 def get_remote_height(force: bool = False):
-    base = REMOTE_RPC_BASE
-    if not base:
+    global REMOTE_RPC_BASE, REMOTE_RPC_BASES
+    bases = list(REMOTE_RPC_BASES) if REMOTE_RPC_BASES else ([REMOTE_RPC_BASE] if REMOTE_RPC_BASE else [])
+    if not bases:
         return None
     now = time.time()
     cache = _REMOTE_HEIGHT_CACHE
     if not force and (now - cache.get("ts", 0.0)) < max(1.0, REMOTE_RPC_CACHE_SEC):
         return cache.get("height")
     payload = {"jsonrpc": "2.0", "id": 1, "method": REMOTE_RPC_METHOD or "eth_blockNumber", "params": []}
-    try:
-        resp = requests.post(
-            base,
-            json=payload,
-            timeout=REMOTE_RPC_TIMEOUT,
-            verify=REMOTE_RPC_VERIFY,
-        )
-        resp.raise_for_status()
-        data = resp.json()
-        result = data.get("result")
-        height = None
-        if isinstance(result, str) and result.startswith("0x"):
-            height = int(result, 16)
-        elif result is not None:
-            height = int(result)
-        cache["height"] = height
-        cache["ts"] = now
-        cache["error"] = None
-        return height
-    except Exception as exc:
-        cache["ts"] = now
-        cache["error"] = str(exc)
-        return cache.get("height")
+    last_error = None
+    for idx, base in enumerate(bases):
+        if not base:
+            continue
+        try:
+            verify = REMOTE_RPC_VERIFY if base.startswith("https://") else False
+            resp = requests.post(
+                base,
+                json=payload,
+                timeout=REMOTE_RPC_TIMEOUT,
+                verify=verify,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            result = data.get("result")
+            height = None
+            if isinstance(result, str) and result.startswith("0x"):
+                height = int(result, 16)
+            elif result is not None:
+                height = int(result)
+            cache["height"] = height
+            cache["ts"] = now
+            cache["error"] = None
+            cache["base"] = base
+            REMOTE_RPC_BASE = base
+            if REMOTE_RPC_BASES:
+                try:
+                    current_index = REMOTE_RPC_BASES.index(base)
+                except ValueError:
+                    REMOTE_RPC_BASES.insert(0, base)
+                else:
+                    if current_index != 0:
+                        REMOTE_RPC_BASES.insert(0, REMOTE_RPC_BASES.pop(current_index))
+            return height
+        except Exception as exc:
+            last_error = f"{base}: {exc}"
+            try:
+                if cache.get("error") != last_error:
+                    app.logger.warning("Remote height fetch failed via %s: %s", base, exc)
+            except Exception:
+                pass
+            continue
+    cache["ts"] = now
+    cache["error"] = last_error
+    return cache.get("height")
 
 
 def _mining_state_sync_from_compose():

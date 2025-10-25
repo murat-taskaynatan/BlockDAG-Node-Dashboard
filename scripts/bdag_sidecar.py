@@ -32,6 +32,44 @@ SEALED_PATTERNS = [r"\bsealed\b", r"\bblock\s+sealed\b"]
 DEFAULT_RPC_BASE = "http://127.0.0.1:18545"
 
 
+def _normalize_remote_url(value: str) -> str:
+    text = (value or "").strip()
+    if text and "://" not in text:
+        text = f"http://{text}"
+    return text.rstrip("/")
+
+
+PRIMARY_REMOTE_RPC_BASE = _normalize_remote_url("http://13.245.135.249:18545")
+LEGACY_REMOTE_RPC_BASES = [_normalize_remote_url("https://rpc.awakening.bdagscan.com")]
+DEFAULT_REMOTE_RPC_BASES = [
+    PRIMARY_REMOTE_RPC_BASE,
+    _normalize_remote_url("https://rpc.bdagscan.com"),
+    *[base for base in LEGACY_REMOTE_RPC_BASES if base != PRIMARY_REMOTE_RPC_BASE],
+]
+
+
+def _remote_rpc_candidates() -> list[str]:
+    raw = os.getenv("BDAG_REMOTE_RPC_BASES", os.getenv("BDAG_REMOTE_RPC_BASE", ""))
+    candidates = []
+    if raw:
+        if isinstance(raw, (list, tuple, set)):
+            parts = [str(item).strip() for item in raw]
+        else:
+            parts = [part.strip() for part in str(raw).split(",")]
+        for part in parts:
+            normalized = _normalize_remote_url(part)
+            if normalized and normalized not in candidates:
+                candidates.append(normalized)
+    if candidates:
+        has_primary = PRIMARY_REMOTE_RPC_BASE in candidates
+        has_legacy = any(base in LEGACY_REMOTE_RPC_BASES for base in candidates)
+        if has_legacy and not has_primary:
+            candidates.insert(0, PRIMARY_REMOTE_RPC_BASE)
+    if not candidates:
+        candidates = DEFAULT_REMOTE_RPC_BASES[:]
+    return candidates
+
+
 def _sanitize_host(value: str) -> str:
     host = (value or "").strip()
     if host in {"0.0.0.0", "*", "[::]", "::"}:
@@ -348,7 +386,8 @@ def _collect_activity(state: Dict[str, Any]) -> Tuple[Dict[str, Any], Dict[str, 
 
 def gather_status():
     node_url = _determine_rpc_base()
-    remote_url = os.getenv("BDAG_REMOTE_RPC_BASE", "https://rpc.awakening.bdagscan.com").strip()
+    remote_candidates = _remote_rpc_candidates()
+    remote_url = remote_candidates[0]
 
     height = 0
     peers = 0
@@ -368,9 +407,20 @@ def gather_status():
         peer_info = _rpc(node_url, "bdag_getPeerInfo")
         peers = max(peers, _count_peers(peer_info))
 
-    remote_resp = _rpc(remote_url, os.getenv("BDAG_REMOTE_RPC_METHOD", "eth_blockNumber"))
-    if isinstance(remote_resp, dict):
-        remote_height = _parse_hex(remote_resp.get("result"))
+    remote_method = os.getenv("BDAG_REMOTE_RPC_METHOD", "eth_blockNumber")
+    remote_height = 0
+    remote_used = None
+    for candidate in remote_candidates:
+        resp = _rpc(candidate, remote_method)
+        if isinstance(resp, dict):
+            remote_height = _parse_hex(resp.get("result"))
+            if remote_height > 0:
+                remote_used = candidate
+                break
+            if remote_used is None:
+                remote_used = candidate
+    if remote_used:
+        remote_url = remote_used
 
     activity_payload, updated_state = _collect_activity(state)
     if updated_state != state:
@@ -382,6 +432,7 @@ def gather_status():
         "height": height,
         "peers": peers,
         "height_remote": remote_height,
+        "remote_rpc_base": remote_url,
         "source": "bdag_sidecar",
     }
     if activity_payload:
