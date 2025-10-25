@@ -606,6 +606,89 @@ def _extract_node_args(node_args: str) -> tuple[str, str]:
             port = candidate
     return _sanitize_host(host), port
 
+_CHAIN_DATA_DEST_HINTS = (
+    "/bdag/data",
+    "/opt/bdag/data",
+    "/blockdag/data",
+    "/chaindata",
+)
+
+def _is_chain_data_destination(dest: str) -> bool:
+    if not dest:
+        return False
+    dest_lower = dest.lower().rstrip("/")
+    if _CHAIN_DATA_DEST_HINTS and any(dest_lower == hint or dest_lower.endswith(hint) for hint in _CHAIN_DATA_DEST_HINTS):
+        return True
+    if dest_lower.endswith("/data") and any(token in dest_lower for token in ("bdag", "chain", "chaindata")):
+        return True
+    return False
+
+def _resolve_container_chain_paths(info: dict, env: dict | None = None) -> tuple[Path | None, Path | None]:
+    data_path: Path | None = None
+    backup_path: Path | None = None
+    mounts = info.get("Mounts") or []
+    for mount in mounts:
+        dest = (mount.get("Destination") or "").strip()
+        source = mount.get("Source")
+        if not dest or not source:
+            continue
+        if _is_chain_data_destination(dest):
+            data_path = _normalize_path(source)
+        elif "backup" in dest.lower() or dest.lower().endswith("/backups"):
+            backup_path = _normalize_path(source)
+    env = env or {}
+    if not data_path:
+        candidate = env.get("BDAG_CHAIN_DATA_DIR") or env.get("CHAIN_DATA_DIR")
+        if candidate:
+            data_path = _normalize_path(candidate)
+    if not backup_path:
+        candidate = env.get("BDAG_CHAIN_BACKUP_DIR") or env.get("CHAIN_BACKUP_DIR")
+        if candidate:
+            backup_path = _normalize_path(candidate)
+    return data_path, backup_path
+
+def _inspect_container_chain_paths(name: str) -> tuple[Path | None, Path | None]:
+    if not (ALLOW_DOCKER and name):
+        return None, None
+    try:
+        inspect = subprocess.run(
+            ["docker", "inspect", name],
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=5,
+        )
+        data = json.loads(inspect.stdout)
+        info = data[0] if data else {}
+    except Exception:
+        return None, None
+    env = _parse_docker_env(info.get("Config", {}).get("Env"))
+    return _resolve_container_chain_paths(info, env)
+
+def _ensure_node_chain_data_dir(ctx: "NodeContext", *, refresh: bool = True) -> Path | None:
+    current = _normalize_path(ctx.chain_data_dir)
+    if current and current.exists():
+        return current
+    if not refresh or not (ALLOW_DOCKER and ctx.container):
+        return current
+    refreshed, backup_path = _inspect_container_chain_paths(ctx.container)
+    if refreshed:
+        refreshed = _normalize_path(refreshed)
+        if refreshed and refreshed != ctx.chain_data_dir:
+            ctx.chain_data_dir = refreshed
+            try:
+                app.logger.info("Updated chain data dir for %s to %s", ctx.id, refreshed)
+            except Exception:
+                pass
+        if backup_path and backup_path != ctx.chain_backup_dir and backup_path.exists():
+            ctx.chain_backup_dir = backup_path
+        if ctx.id == DEFAULT_NODE_ID:
+            _bind_default_node_globals()
+        if refreshed and refreshed.exists():
+            return refreshed
+        return refreshed
+    return current
+
 
 def _resolve_container_rpc_base(info: dict, env: dict) -> str:
     node_args = env.get("NODE_ARGS", "")
@@ -688,14 +771,11 @@ def _discover_docker_nodes():
         rpc_base = _resolve_container_rpc_base(info, env)
         wallet_address = (env.get("BDAG_WALLET_ADDRESS") or env.get("WALLET_ADDRESS") or env.get("MINING_ADDRESS") or "").strip()
 
-        data_dir = None
-        for mount in info.get("Mounts", []):
-            dest = (mount.get("Destination") or "").rstrip("/")
-            if dest in {"/bdag/data", "/opt/bdag/data"}:
-                data_dir = mount.get("Source")
-                break
-        if not data_dir:
+        data_dir_path, backup_dir_path = _resolve_container_chain_paths(info, env)
+        if not data_dir_path:
             continue
+        data_dir = str(data_dir_path)
+        backup_dir = str(backup_dir_path) if backup_dir_path else str(SHARED_CHAIN_BACKUP_DIR)
 
         labels = info.get("Config", {}).get("Labels") or {}
         label = labels.get("com.docker.compose.service") or info.get("Name", "").lstrip("/") or name
@@ -706,7 +786,7 @@ def _discover_docker_nodes():
             "container": name,
             "rpc_base": rpc_base,
             "chain_data_dir": data_dir,
-            "chain_backup_dir": str(SHARED_CHAIN_BACKUP_DIR),
+            "chain_backup_dir": backup_dir,
             "wallet_address": wallet_address,
         })
     return entries
@@ -725,9 +805,24 @@ def _augment_nodes_with_docker(nodes: "OrderedDict[str, NodeContext]"):
             discovered_containers.append(container)
         if container and container in existing_by_container:
             ctx = existing_by_container[container]
+            changed = False
             new_rpc = (meta.get("rpc_base") or "").strip()
             if new_rpc and new_rpc != ctx.rpc_base:
                 ctx.rpc_base = new_rpc
+                changed = True
+            new_chain = _normalize_path(meta.get("chain_data_dir"))
+            if new_chain and new_chain != ctx.chain_data_dir:
+                ctx.chain_data_dir = new_chain
+                changed = True
+                try:
+                    app.logger.info("Aligned chain data dir for %s to %s", ctx.id, new_chain)
+                except Exception:
+                    pass
+            new_backup = _normalize_path(meta.get("chain_backup_dir"))
+            if new_backup and new_backup.exists() and new_backup != ctx.chain_backup_dir:
+                ctx.chain_backup_dir = new_backup
+                changed = True
+            if changed:
                 updated_ids.append(ctx.id)
             continue
         if container and container in existing_containers:
@@ -2569,6 +2664,7 @@ def index():
 @app.route("/api/status")
 def status():
     ctx = resolve_node_from_request()
+    _ensure_node_chain_data_dir(ctx)
     with use_node_context(ctx):
         ok, health_text, h, p, rpc_latency_ms, remote_h = sample_once()
         node_state = _current_node_state()
@@ -3629,6 +3725,9 @@ def _chain_delete_task(container_name: str, backup_name: str):
 
 def trigger_chain_backup(container_name: str, ctx: NodeContext):
     target_container = container_name or ctx.container
+    resolved_chain_dir = _ensure_node_chain_data_dir(ctx)
+    if not resolved_chain_dir:
+        return False, f"Unable to determine chain data directory for node {ctx.label}"
     with use_node_context(ctx):
         try:
             _ensure_backup_dir()
@@ -3650,6 +3749,9 @@ def trigger_chain_backup(container_name: str, ctx: NodeContext):
 
 def trigger_chain_restore(container_name: str, backup_name: str, ctx: NodeContext):
     target_container = container_name or ctx.container
+    resolved_chain_dir = _ensure_node_chain_data_dir(ctx)
+    if not resolved_chain_dir:
+        return False, f"Unable to determine chain data directory for node {ctx.label}"
     with use_node_context(ctx):
         try:
             _ensure_backup_dir()
