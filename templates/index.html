@@ -1350,18 +1350,7 @@ function updateNodeContainerDetails(){
       : 'Container status unavailable';
   }
 
-  const detailParts = [];
-  if (containerEntry){
-    const status = containerEntry.status || '';
-    if (status) detailParts.push(status);
-    detailParts.push(describeAutoRestart(containerEntry));
-    detailParts.push(describeAutoBackup(containerEntry));
-  } else if (containerName){
-    detailParts.push(`${containerName} (status unavailable)`);
-  } else {
-    detailParts.push('No container linked');
-  }
-  details.textContent = detailParts.filter(Boolean).join(' • ');
+  details.textContent = '';
 }
 
 function renderNodeControls(errorMsg){
