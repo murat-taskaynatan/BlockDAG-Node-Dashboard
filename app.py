@@ -546,6 +546,7 @@ class NodeContext:
         self.last_good_remote_height = 0
         self.height_zero_streak = 0
         self.peers_zero_streak = 0
+        self.sidecar_cache = {"paths": None, "resolved": None}
 
     def as_metadata(self):
         return {
@@ -587,6 +588,8 @@ def _sanitize_host(value: str) -> str:
 
 _NODE_ARGS_HTTP_ADDR = re.compile(r"--http\.addr=([^\s]+)")
 _NODE_ARGS_HTTP_PORT = re.compile(r"--http\.port=([^\s]+)")
+_NODE_ARGS_RPC_USER = re.compile(r"--rpcuser=([^\s]+)")
+_NODE_ARGS_RPC_PASS = re.compile(r"--rpcpass=([^\s]+)")
 
 
 def _extract_node_args(node_args: str) -> tuple[str, str]:
@@ -605,6 +608,22 @@ def _extract_node_args(node_args: str) -> tuple[str, str]:
         if candidate.isdigit():
             port = candidate
     return _sanitize_host(host), port
+
+
+def _extract_rpc_credentials(node_args: str, env: dict | None = None) -> tuple[str, str]:
+    env = env or {}
+    user = (env.get("BDAG_RPC_USER") or env.get("RPC_USER") or env.get("RPC_USERNAME") or "").strip()
+    password = (env.get("BDAG_RPC_PASS") or env.get("RPC_PASS") or env.get("RPC_PASSWORD") or "").strip()
+    if node_args:
+        if not user:
+            match = _NODE_ARGS_RPC_USER.search(node_args)
+            if match:
+                user = match.group(1).strip().strip("'\"")
+        if not password:
+            match = _NODE_ARGS_RPC_PASS.search(node_args)
+            if match:
+                password = match.group(1).strip().strip("'\"")
+    return user, password
 
 _CHAIN_DATA_DEST_HINTS = (
     "/bdag/data",
@@ -770,6 +789,8 @@ def _discover_docker_nodes():
         env = _parse_docker_env(info.get("Config", {}).get("Env"))
         rpc_base = _resolve_container_rpc_base(info, env)
         wallet_address = (env.get("BDAG_WALLET_ADDRESS") or env.get("WALLET_ADDRESS") or env.get("MINING_ADDRESS") or "").strip()
+        node_args = env.get("NODE_ARGS") or ""
+        rpc_user, rpc_pass = _extract_rpc_credentials(node_args, env)
 
         data_dir_path, backup_dir_path = _resolve_container_chain_paths(info, env)
         if not data_dir_path:
@@ -785,6 +806,8 @@ def _discover_docker_nodes():
             "label": label,
             "container": name,
             "rpc_base": rpc_base,
+            "rpc_user": rpc_user,
+            "rpc_pass": rpc_pass,
             "chain_data_dir": data_dir,
             "chain_backup_dir": backup_dir,
             "wallet_address": wallet_address,
@@ -823,6 +846,14 @@ def _augment_nodes_with_docker(nodes: "OrderedDict[str, NodeContext]"):
             if new_backup and new_backup.exists() and new_backup != ctx.chain_backup_dir:
                 ctx.chain_backup_dir = new_backup
                 changed = True
+            new_user = (meta.get("rpc_user") or "").strip()
+            if new_user and new_user != (ctx.rpc_user or ""):
+                ctx.rpc_user = new_user
+                changed = True
+            new_pass = (meta.get("rpc_pass") or "").strip()
+            if new_pass and new_pass != (ctx.rpc_pass or ""):
+                ctx.rpc_pass = new_pass
+                changed = True
             if changed:
                 updated_ids.append(ctx.id)
             continue
@@ -847,6 +878,14 @@ def _augment_nodes_with_docker(nodes: "OrderedDict[str, NodeContext]"):
             new_backup = _normalize_path(meta.get("chain_backup_dir"))
             if new_backup and new_backup.exists() and new_backup != reusable.chain_backup_dir:
                 reusable.chain_backup_dir = new_backup
+                changed = True
+            new_user = (meta.get("rpc_user") or "").strip()
+            if new_user and new_user != (reusable.rpc_user or ""):
+                reusable.rpc_user = new_user
+                changed = True
+            new_pass = (meta.get("rpc_pass") or "").strip()
+            if new_pass and new_pass != (reusable.rpc_pass or ""):
+                reusable.rpc_pass = new_pass
                 changed = True
             new_wallet = (meta.get("wallet_address") or "").strip()
             if new_wallet and new_wallet.lower() != (reusable.wallet_address or "").lower():
@@ -994,6 +1033,8 @@ def _bind_default_node_globals():
     globals()["_last_good_height"] = getattr(DEFAULT_NODE, "last_good_height", 0)
     globals()["_last_good_remote_height"] = getattr(DEFAULT_NODE, "last_good_remote_height", 0)
     globals()["_last_activity_totals"] = getattr(DEFAULT_NODE, "last_activity_totals", {"mined": 0.0, "processed": 0.0, "sealed": 0.0})
+    globals()["_SIDECAR_PATH_CACHE"] = getattr(DEFAULT_NODE, "sidecar_cache", {"paths": None, "resolved": None})
+    globals()["_CURRENT_NODE_ID"] = DEFAULT_NODE.id
 
 
 def _rebuild_node_mappings():
@@ -1138,6 +1179,8 @@ _CONTEXT_SWAP_KEYS = (
     "_last_good_height",
     "_last_good_remote_height",
     "_last_activity_totals",
+    "_SIDECAR_PATH_CACHE",
+    "_CURRENT_NODE_ID",
 )
 
 
@@ -1189,6 +1232,8 @@ def _context_values_for(ctx: NodeContext):
         "_last_good_height": getattr(ctx, "last_good_height", 0),
         "_last_good_remote_height": getattr(ctx, "last_good_remote_height", 0),
         "_last_activity_totals": getattr(ctx, "last_activity_totals", {"mined": 0.0, "processed": 0.0, "sealed": 0.0}),
+        "_SIDECAR_PATH_CACHE": ctx.sidecar_cache,
+        "_CURRENT_NODE_ID": ctx.id,
     }
 
 
@@ -1228,6 +1273,7 @@ def _restore_context_from_globals(ctx: NodeContext):
     ctx.last_good_height = globals().get("_last_good_height", getattr(ctx, "last_good_height", 0))
     ctx.last_good_remote_height = globals().get("_last_good_remote_height", getattr(ctx, "last_good_remote_height", 0))
     ctx.last_activity_totals = globals().get("_last_activity_totals", getattr(ctx, "last_activity_totals", {"mined": 0.0, "processed": 0.0, "sealed": 0.0}))
+    ctx.sidecar_cache = globals().get("_SIDECAR_PATH_CACHE", ctx.sidecar_cache)
 
 
 @contextmanager
@@ -4330,6 +4376,14 @@ def _load_sidecar_json(path_override=None):
     return {}
 
 
+def _fallback_allowed_for_current_node() -> bool:
+    current = globals().get("_CURRENT_NODE_ID")
+    default_id = globals().get("DEFAULT_NODE_ID")
+    if not default_id:
+        return True
+    return not current or current == default_id
+
+
 def _height_from_file(path=None):
     try:
         if path:
@@ -4352,7 +4406,11 @@ def get_chain_height_fallback():
 
 def height_or_fb(h):
     try:
-        return h if h else get_chain_height_fallback()
+        if h:
+            return h
+        if not _fallback_allowed_for_current_node():
+            return 0
+        return get_chain_height_fallback()
     except Exception:
         return h or 0
 # ---- END: height file fallback helpers ----
@@ -4363,6 +4421,8 @@ def peers_or_fb(peers):
     except Exception:
         p = 0
     if p > 0:
+        return p
+    if not _fallback_allowed_for_current_node():
         return p
     try:
         side = _status_from_file()
