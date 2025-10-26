@@ -3907,7 +3907,8 @@ def _chain_restore_task(container_name: str, backup_name: str):
         if dir_size_bytes and dir_size_bytes > size_bytes:
             size_bytes = float(dir_size_bytes)
         status = "success"
-        message = f"Restored from {backup_name} ({_format_bytes(size_bytes)}, {elapsed:.1f}s)"
+        label = backup_name or 'backup'
+        message = f"Restore succeeded! Restored {label} ({_format_bytes(size_bytes)}, {elapsed:.1f}s)"
         details.update({
             "restored": backup_name,
             "size": size_bytes,
