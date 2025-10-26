@@ -70,6 +70,7 @@
 #nodeControlsCard .node-ctrls__field select{width:100%}
 #nodeControlsCard .node-ctrls__actions{display:flex;gap:8px;flex-wrap:nowrap}
 #nodeControlsCard .node-ctrls__actions .btn{flex:0 0 auto;min-width:110px;white-space:nowrap;height:34px;display:flex;align-items:center;justify-content:center;padding:.35rem .6rem;line-height:1.2}
+#nodeControlsCard .btn--toggle{min-width:140px;gap:8px}
 #nodeControlsCard .node-ctrls__actions--chain .btn{min-width:140px;width:auto;flex:0 0 auto;white-space:nowrap;text-align:center}
 #nodeControlsCard .node-ctrls__field--auto input{width:100%;text-align:center}
 #nodeControlsCard .node-ctrls__meta{align-self:flex-start;text-align:left;margin:0;font-size:12px;line-height:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-height:1.2em;display:flex;align-items:center}
@@ -169,8 +170,7 @@
             <button class="btn" id="btnScanNodes" type="button" disabled>Scan Nodes</button>
           </div>
           <div class="node-ctrls__actions node-ctrls__actions--container">
-            <button class="btn" data-node-action="start" id="btnContainerStart" disabled>Start</button>
-            <button class="btn btn--danger" data-node-action="stop" id="btnContainerStop" disabled>Stop</button>
+            <button class="btn btn--toggle" data-node-action="start" id="btnContainerToggle" disabled>▶ Start</button>
             <button class="btn" data-node-action="restart" id="btnContainerRestart" disabled>Restart</button>
           </div>
         <div class="node-ctrls__actions node-ctrls__actions--auto">
@@ -1129,8 +1129,7 @@ function findContainer(name){
 
 function updateNodeContainerDetails(){
   const details = document.getElementById('nodeContainerDetails');
-  const startBtn = document.getElementById('btnContainerStart');
-  const stopBtn = document.getElementById('btnContainerStop');
+  const toggleBtn = document.getElementById('btnContainerToggle');
   const hoursInput = autoRestartUI.hoursInput;
   if (!details) return;
   details.textContent = '';
@@ -1147,8 +1146,6 @@ function updateNodeContainerDetails(){
     hoursInput.disabled = true;
   }
 
-  details.textContent = '';
-
   const tooltipBase = (() => {
     if (hostMode) return 'Docker controls unavailable on this host';
     if (!containerName) return 'No container available';
@@ -1163,19 +1160,17 @@ function updateNodeContainerDetails(){
     tooltip: tooltipBase || 'Toggle automatic container restart'
   });
 
-  if (startBtn){
-    startBtn.disabled = hostMode || !containerEntry || String(containerEntry.status || '').toLowerCase().includes('up');
-    startBtn.style.opacity = startBtn.disabled ? '0.45' : '1';
-    startBtn.title = hostMode ? 'Docker controls unavailable on this host'
-      : containerEntry ? (startBtn.disabled ? 'Container already running' : 'Start container')
-      : 'Container status unavailable';
-  }
-  if (stopBtn){
-    const isRunning = !!(containerEntry && String(containerEntry.status || '').toLowerCase().includes('up'));
-    stopBtn.disabled = hostMode || !containerEntry || !isRunning;
-    stopBtn.style.opacity = stopBtn.disabled ? '0.45' : '1';
-    stopBtn.title = hostMode ? 'Docker controls unavailable on this host'
-      : containerEntry ? (stopBtn.disabled ? 'Container already stopped' : 'Stop container')
+  if (toggleBtn){
+    const statusText = String(containerEntry?.status || '');
+    const isRunning = !!(containerEntry && statusText.toLowerCase().includes('up'));
+    const desiredAction = isRunning ? 'stop' : 'start';
+    toggleBtn.dataset.nodeAction = desiredAction;
+    toggleBtn.disabled = !canControl;
+    toggleBtn.style.opacity = toggleBtn.disabled ? '0.45' : '1';
+    toggleBtn.classList.toggle('btn--danger', isRunning);
+    toggleBtn.textContent = isRunning ? '■ Stop' : '▶ Start';
+    toggleBtn.title = hostMode ? 'Docker controls unavailable on this host'
+      : containerEntry ? (isRunning ? 'Stop container' : 'Start container')
       : 'Container status unavailable';
   }
 }
