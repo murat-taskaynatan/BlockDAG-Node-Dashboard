@@ -1431,7 +1431,7 @@ function renderChainControls(){
     select.value = pendingOpt.value;
   }
   const jobDetails = job && job.details ? job.details : {};
-  const jobNodeId = (jobDetails.node || jobDetails.node_id || jobDetails.nodeId || '').toString().trim();
+  const jobNodeId = (jobDetails.node || jobDetails.node_id || jobDetails.nodeId || jobDetails.node_label || '').toString().trim();
   const jobContainerName = (jobDetails.container || jobDetails.target_container || '').trim();
   const activeNodeMeta = getActiveNodeMeta();
   const activeNodeContainer = activeNodeMeta && activeNodeMeta.container ? activeNodeMeta.container.trim() : '';
@@ -1440,14 +1440,14 @@ function renderChainControls(){
     (!jobNodeId && (!jobContainerName || !activeNodeContainer || jobContainerName === activeNodeContainer))
   );
   const jobNodeMeta = jobNodeId ? (knownNodes || []).find(node => node && node.id === jobNodeId) : null;
-  const jobNodeDisplay = jobNodeMeta ? (jobNodeMeta.label || jobNodeMeta.container || jobNodeMeta.id) : (jobContainerName || jobNodeId || 'another node');
+  const jobNodeLabel = jobNodeMeta ? (jobNodeMeta.label || jobNodeMeta.container || jobNodeMeta.id) : (jobDetails.node_label || jobContainerName || jobNodeId || 'another node');
   const showProgressDetails = !jobActive || jobType !== 'restore' || jobActiveOnThisNode;
   const jobDisplayMessage = showProgressDetails ? jobMessage : '';
   if (jobActive){
     backupScanState = { message:'', ok:true };
     let statusText = jobDisplayMessage || job.message || `Chain ${jobType || 'operation'} in progress…`;
     if (jobActive && jobType === 'restore' && !jobActiveOnThisNode){
-      statusText = `Restore running on ${jobNodeDisplay}`;
+      statusText = `Restore running on ${jobNodeLabel}`;
     }
     setChainControlStatus(statusText, job.status !== 'error');
     nodeControlState.renderedChainJobDigest = jobDigest || statusText || '';
