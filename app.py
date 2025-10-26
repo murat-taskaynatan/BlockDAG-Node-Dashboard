@@ -3831,7 +3831,7 @@ def _chain_restore_task(container_name: str, backup_name: str):
                 except subprocess.TimeoutExpired:
                     current_read = _read_process_read_bytes(proc)
                     if current_read is not None:
-                        read_bytes = max(0, current_read - base_read)
+                        read_bytes = max(0.0, float(current_read - base_read))
                         last_read = read_bytes
                     else:
                         read_bytes = last_read
@@ -3842,18 +3842,23 @@ def _chain_restore_task(container_name: str, backup_name: str):
                     except Exception:
                         dir_size_bytes = None
                     if dir_size_bytes is not None:
-                        read_bytes = max(read_bytes or 0, dir_size_bytes or 0)
+                        read_bytes = max(read_bytes or 0.0, float(dir_size_bytes or 0.0))
                         last_read = read_bytes
                     elapsed = time.time() - started_ts
                     estimated_total = float(total_bytes or 0) * RESTORE_PROGRESS_EXPANSION_FACTOR
+                    if estimated_total <= 0 and dir_size_bytes:
+                        estimated_total = float(dir_size_bytes) * max(RESTORE_PROGRESS_EXPANSION_FACTOR, 2.0)
                     progress_total = estimated_total
                     if dir_size_bytes:
                         progress_total = max(progress_total, float(dir_size_bytes))
                     if read_bytes:
-                        progress_total = max(progress_total, float(read_bytes))
-                    if progress_total <= 0:
-                        fallback_total = read_bytes or dir_size_bytes or total_bytes or 0
-                        progress_total = float(fallback_total)
+                        if estimated_total <= 0:
+                            progress_total = max(progress_total, float(read_bytes) * max(RESTORE_PROGRESS_EXPANSION_FACTOR, 2.0))
+                        progress_total = max(progress_total, float(read_bytes) * 1.01)
+                    if progress_total <= 0 and read_bytes:
+                        progress_total = float(read_bytes) * max(RESTORE_PROGRESS_EXPANSION_FACTOR, 2.0)
+                    if progress_total > 0 and read_bytes and progress_total <= float(read_bytes):
+                        progress_total = float(read_bytes) * max(RESTORE_PROGRESS_EXPANSION_FACTOR, 2.0)
                     rate = None
                     eta = None
                     remaining_bytes = None
