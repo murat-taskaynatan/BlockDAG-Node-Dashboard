@@ -113,6 +113,7 @@ CHAIN_BACKUP_DIR = Path(os.getenv("BDAG_CHAIN_BACKUP_DIR", os.path.expanduser("~
 CHAIN_BACKUP_PREFIX = (os.getenv("BDAG_CHAIN_BACKUP_PREFIX", "blockdag-chaindata") or "blockdag-chaindata").strip() or "blockdag-chaindata"
 CHAIN_BACKUP_SUFFIX = (os.getenv("BDAG_CHAIN_BACKUP_SUFFIX", ".tar.gz") or ".tar.gz").strip()
 CHAIN_BACKUP_MAX = max(0, int(os.getenv("BDAG_CHAIN_BACKUP_MAX", "0")))
+RESTORE_PROGRESS_EXPANSION_FACTOR = float(os.getenv("BDAG_RESTORE_EXPANSION_FACTOR", "2.0"))
 
 
 def _normalize_path(value) -> Path | None:
@@ -3206,6 +3207,17 @@ def _chain_job_progress(message: str, details=None):
         _chain_job_state["message"] = message
         if details:
             current = dict(_chain_job_state.get("details") or {})
+            prev_percent = current.get("percent")
+            new_percent = details.get("percent") if isinstance(details, dict) else None
+            if prev_percent is not None and new_percent is not None:
+                try:
+                    coerced_prev = float(prev_percent)
+                    coerced_new = float(new_percent)
+                    if coerced_new < coerced_prev:
+                        details = dict(details)
+                        details["percent"] = coerced_prev
+                except Exception:
+                    pass
             current.update(details)
             _chain_job_state["details"] = current
 
@@ -3354,24 +3366,69 @@ def _ensure_backup_dir():
     CHAIN_BACKUP_DIR.mkdir(parents=True, exist_ok=True)
 
 
-def _is_container_running(name: str) -> bool:
+def _container_running_state(name: str) -> tuple[bool, bool]:
     if not name or not ALLOW_DOCKER:
-        return False
+        return False, False
     try:
-        out = subprocess.check_output(["docker", "inspect", "-f", "{{.State.Running}}", name], text=True, timeout=5)
-        return out.strip().lower() == "true"
+        out = subprocess.check_output(
+            ["docker", "inspect", "-f", "{{.State.Running}}", name],
+            text=True,
+            timeout=5,
+        )
+        val = (out or "").strip().lower()
+        if val in {"true", "false"}:
+            return True, val == "true"
+    except subprocess.CalledProcessError:
+        return False, False
     except Exception:
-        return False
+        return False, False
+    return True, False
+
+
+def _is_container_running(name: str) -> bool:
+    _exists, running = _container_running_state(name)
+    return running
+
+
+def _wait_for_container_state(name: str, *, running: bool, timeout: float = 30.0, interval: float = 0.5):
+    if not name or not ALLOW_DOCKER:
+        return
+    deadline = time.time() + max(timeout, 0.0)
+    last_exists = False
+    last_running = False
+    while time.time() < deadline:
+        exists, current = _container_running_state(name)
+        last_exists = exists
+        last_running = current
+        if running and exists and current:
+            return
+        if not running and (not exists or not current):
+            return
+        time.sleep(max(interval, 0.1))
+    state_label = "running" if running else "stopped"
+    detail = "exists" if last_exists else "not found"
+    raise RuntimeError(f"Container {name} did not reach state {state_label} (last state: {detail}, running={last_running})")
+
+
+def _ensure_container_stopped(name: str, timeout: float = 30.0):
+    if not name or not ALLOW_DOCKER:
+        return
+    try:
+        _wait_for_container_state(name, running=False, timeout=timeout)
+    except RuntimeError as exc:
+        raise RuntimeError(f"Container {name} did not stop cleanly: {exc}") from exc
 
 
 def _stop_container_for_job(name: str) -> bool:
     if not name or not ALLOW_DOCKER:
         return False
     if not _is_container_running(name):
+        _ensure_container_stopped(name)
         return False
     result = docker_action(name, "stop")
     if not result.get("ok"):
         raise RuntimeError(result.get("error") or f"Failed to stop container {name}")
+    _wait_for_container_state(name, running=False, timeout=30.0)
     return True
 
 
@@ -3381,6 +3438,7 @@ def _start_container_for_job(name: str) -> bool:
     result = docker_action(name, "start")
     if not result.get("ok"):
         raise RuntimeError(result.get("error") or f"Failed to restart container {name}")
+    _wait_for_container_state(name, running=True, timeout=45.0)
     return True
 
 
@@ -3389,9 +3447,12 @@ def _restart_container_for_job(name: str) -> bool:
         return False
     if not ALLOW_DOCKER:
         raise RuntimeError("Docker control disabled")
-    result = docker_action(name, "restart")
+    running = _is_container_running(name)
+    action = "restart" if running else "start"
+    result = docker_action(name, action)
     if not result.get("ok"):
         raise RuntimeError(result.get("error") or f"Failed to restart container {name}")
+    _wait_for_container_state(name, running=True, timeout=45.0)
     return True
 
 
@@ -3460,6 +3521,25 @@ def _format_bytes(num: float) -> str:
     return f"{value:.1f} {units[idx]}"
 
 
+def _format_duration_short(seconds: float | None) -> str:
+    if seconds is None:
+        return ""
+    try:
+        total = int(max(float(seconds), 0.0))
+    except Exception:
+        return f"{seconds:.1f}s"
+    if total < 60:
+        return f"{total}s"
+    minutes, secs = divmod(total, 60)
+    if minutes < 60:
+        return f"{minutes}m {secs}s"
+    hours, minutes = divmod(minutes, 60)
+    if hours < 24:
+        return f"{hours}h {minutes}m"
+    days, hours = divmod(hours, 24)
+    return f"{days}d {hours}h"
+
+
 def _parse_backup_timestamp(name: str):
     if not name:
         return None
@@ -3474,7 +3554,7 @@ def _parse_backup_timestamp(name: str):
         return None
 
 
-def _format_backup_progress_message(dest_name: str, size_bytes: int = 0, elapsed_sec: float | None = None, total_bytes: int | None = None, verb: str = "Creating") -> str:
+def _format_backup_progress_message(dest_name: str, size_bytes: int = 0, elapsed_sec: float | None = None, total_bytes: int | None = None, verb: str = "Creating", rate_bytes_sec: float | None = None, eta_sec: float | None = None) -> str:
     extras = []
     if total_bytes and total_bytes > 0:
         percent = 0.0
@@ -3485,8 +3565,10 @@ def _format_backup_progress_message(dest_name: str, size_bytes: int = 0, elapsed
         extras.append(f"{percent:.1f}%")
     if size_bytes > 0:
         extras.append(_format_bytes(size_bytes))
-    if elapsed_sec is not None:
-        extras.append(f"{elapsed_sec:.1f}s")
+    if eta_sec is not None and eta_sec > 0:
+        extras.append(f"ETA {_format_duration_short(eta_sec)}")
+    if rate_bytes_sec is not None and rate_bytes_sec > 0:
+        extras.append(f"{_format_bytes(rate_bytes_sec)}/s")
     suffix = f" ({', '.join(extras)})" if extras else ""
     return f"{verb} {dest_name}{suffix}"
 
@@ -3586,6 +3668,14 @@ def _chain_backup_task(container_name: str):
                     except Exception:
                         size_bytes = 0
                     elapsed = time.time() - started_ts
+                    rate = None
+                    eta = None
+                    if elapsed > 0 and size_bytes:
+                        rate = max(float(size_bytes) / max(elapsed, 1e-6), 0.0)
+                    if total_bytes:
+                        remaining_bytes = max(total_bytes - size_bytes, 0)
+                        if rate and rate > 0:
+                            eta = max(remaining_bytes / rate, 0.0)
                     loop_details = {
                         "path": dest_name,
                         "started": started_ts,
@@ -3593,11 +3683,19 @@ def _chain_backup_task(container_name: str):
                     }
                     if size_bytes:
                         loop_details["size"] = size_bytes
+                    if rate is not None:
+                        loop_details["rate"] = rate
+                    if eta is not None:
+                        loop_details["eta"] = eta
                     if total_bytes:
                         loop_details["total"] = total_bytes
                         if total_bytes > 0:
                             loop_details["percent"] = max(0.0, min(100.0, (size_bytes / total_bytes) * 100.0))
-                    _chain_job_progress(_format_backup_progress_message(dest_name, size_bytes, elapsed, total_bytes), loop_details)
+                            if rate is not None:
+                                loop_details["rate"] = rate
+                            if eta is not None:
+                                loop_details["eta"] = eta
+                    _chain_job_progress(_format_backup_progress_message(dest_name, size_bytes, elapsed, total_bytes, rate_bytes_sec=rate, eta_sec=eta), loop_details)
                     continue
         finally:
             _chain_job_clear_process()
@@ -3611,6 +3709,12 @@ def _chain_backup_task(container_name: str):
             details["total"] = total_bytes
             if total_bytes > 0:
                 details["percent"] = 100.0
+        if elapsed > 0:
+            details["rate"] = max(float(size) / max(elapsed, 1e-6), 0.0)
+        else:
+            details["rate"] = None
+        details["remaining"] = 0.0
+        details["eta"] = 0.0
         status = "success"
         message = f"Backup created: {dest_name} ({_format_bytes(size)}, {elapsed:.1f}s)"
     except ChainJobCancelled as exc:
@@ -3680,6 +3784,8 @@ def _chain_restore_task(container_name: str, backup_name: str):
         _cleanup_chain_restore_temp_dirs(parent, keep=[CHAIN_DATA_DIR])
         was_running = _stop_container_for_job(container_name)
         details["container_was_running"] = was_running
+        if container_name:
+            _ensure_container_stopped(container_name)
         _check_chain_job_cancelled()
         if CHAIN_DATA_DIR.exists():
             temp_backup = _unique_temp_path(parent / f"{CHAIN_DATA_DIR.name}.pre-restore")
@@ -3718,12 +3824,39 @@ def _chain_restore_task(container_name: str, backup_name: str):
                     break
                 except subprocess.TimeoutExpired:
                     current_read = _read_process_read_bytes(proc)
-                    if current_read is None:
-                        read_bytes = last_read
-                    else:
+                    if current_read is not None:
                         read_bytes = max(0, current_read - base_read)
                         last_read = read_bytes
+                    else:
+                        read_bytes = last_read
+                    dir_size_bytes = None
+                    try:
+                        if CHAIN_DATA_DIR.exists():
+                            dir_size_bytes = _get_dir_size_bytes(CHAIN_DATA_DIR)
+                    except Exception:
+                        dir_size_bytes = None
+                    if dir_size_bytes is not None:
+                        read_bytes = max(read_bytes or 0, dir_size_bytes or 0)
+                        last_read = read_bytes
                     elapsed = time.time() - started_ts
+                    estimated_total = float(total_bytes or 0) * RESTORE_PROGRESS_EXPANSION_FACTOR
+                    progress_total = estimated_total
+                    if dir_size_bytes:
+                        progress_total = max(progress_total, float(dir_size_bytes))
+                    if read_bytes:
+                        progress_total = max(progress_total, float(read_bytes))
+                    if progress_total <= 0:
+                        fallback_total = read_bytes or dir_size_bytes or total_bytes or 0
+                        progress_total = float(fallback_total)
+                    rate = None
+                    eta = None
+                    remaining_bytes = None
+                    if read_bytes and elapsed > 0:
+                        rate = max(float(read_bytes) / max(elapsed, 1e-6), 0.0)
+                    if progress_total and read_bytes is not None:
+                        remaining_bytes = max(progress_total - float(read_bytes or 0), 0.0)
+                        if rate and rate > 0:
+                            eta = max(remaining_bytes / rate, 0.0)
                     loop_details = {
                         "path": backup_name,
                         "started": started_ts,
@@ -3731,11 +3864,27 @@ def _chain_restore_task(container_name: str, backup_name: str):
                     }
                     if read_bytes:
                         loop_details["size"] = read_bytes
-                    if total_bytes:
-                        loop_details["total"] = total_bytes
+                        if rate is not None:
+                            loop_details["rate"] = rate
+                        if remaining_bytes is not None:
+                            loop_details["remaining"] = remaining_bytes
+                        if eta is not None:
+                            loop_details["eta"] = eta
+                    if progress_total > 0:
+                        loop_details["total"] = progress_total
                         if read_bytes:
-                            loop_details["percent"] = max(0.0, min(100.0, (read_bytes / total_bytes) * 100.0))
-                    _chain_job_progress(_format_backup_progress_message(backup_name, read_bytes or 0, elapsed, total_bytes, verb="Restoring"), loop_details)
+                            try:
+                                percent = max(0.0, min(100.0, (float(read_bytes) / max(progress_total, 1e-9)) * 100.0))
+                            except Exception:
+                                percent = 0.0
+                            loop_details["percent"] = percent
+                            if remaining_bytes is not None:
+                                loop_details["remaining"] = remaining_bytes
+                            if rate is not None:
+                                loop_details["rate"] = rate
+                            if eta is not None:
+                                loop_details["eta"] = eta
+                    _chain_job_progress(_format_backup_progress_message(backup_name, read_bytes or 0, elapsed, progress_total, verb="Restoring", rate_bytes_sec=rate, eta_sec=eta), loop_details)
                     continue
         finally:
             _chain_job_clear_process()
@@ -3743,11 +3892,13 @@ def _chain_restore_task(container_name: str, backup_name: str):
             raise RuntimeError(stderr.strip() or stdout.strip() or "Restore command failed")
         elapsed = time.time() - started_ts
         if total_bytes:
-            size_bytes = total_bytes
+            size_bytes = float(total_bytes)
             dir_size_bytes = _get_dir_size_bytes(CHAIN_DATA_DIR) if CHAIN_DATA_DIR.exists() else total_bytes
         else:
             dir_size_bytes = _get_dir_size_bytes(CHAIN_DATA_DIR) if CHAIN_DATA_DIR.exists() else 0
-            size_bytes = dir_size_bytes
+            size_bytes = float(dir_size_bytes)
+        if dir_size_bytes and dir_size_bytes > size_bytes:
+            size_bytes = float(dir_size_bytes)
         status = "success"
         message = f"Restored from {backup_name} ({_format_bytes(size_bytes)}, {elapsed:.1f}s)"
         details.update({
@@ -3757,8 +3908,19 @@ def _chain_restore_task(container_name: str, backup_name: str):
             "elapsed": elapsed,
             "percent": 100.0,
         })
-        if total_bytes and "total" not in details:
-            details["total"] = total_bytes
+        total_final = max(
+            float(total_bytes or 0) * RESTORE_PROGRESS_EXPANSION_FACTOR,
+            float(size_bytes or 0),
+            float(dir_size_bytes or 0),
+        )
+        if total_final > 0:
+            details["total"] = total_final
+        if elapsed > 0:
+            details["rate"] = max(float(size_bytes) / max(elapsed, 1e-6), 0.0)
+        else:
+            details["rate"] = None
+        details["remaining"] = 0.0
+        details["eta"] = 0.0
         if temp_backup and temp_backup.exists():
             shutil.rmtree(temp_backup, ignore_errors=True)
             temp_backup = None
@@ -3783,33 +3945,68 @@ def _chain_restore_task(container_name: str, backup_name: str):
             shutil.move(str(temp_backup), str(CHAIN_DATA_DIR))
             temp_backup = None
     finally:
+        cancelled = bool(details.get("cancelled"))
         daemon_triggered = False
         restart_error = None
         daemon_error = None
         if temp_backup and temp_backup.exists() and not CHAIN_DATA_DIR.exists():
             shutil.move(str(temp_backup), str(CHAIN_DATA_DIR))
             temp_backup = None
-        if container_name:
+        if not cancelled and container_name:
             try:
                 daemon_triggered = _schedule_daemon_restart(container_name)
             except Exception as exc:
                 daemon_error = str(exc)
         container_restarted = False
-        if daemon_triggered:
-            container_restarted = True
-        elif container_name:
+        if not cancelled and daemon_triggered and container_name:
+            try:
+                _wait_for_container_state(container_name, running=True, timeout=60.0)
+                container_restarted = True
+            except Exception as exc:
+                restart_error = str(exc)
+        elif not cancelled and container_name:
             try:
                 container_restarted = bool(_restart_container_for_job(container_name))
             except Exception as exc:
                 restart_error = str(exc)
         details["daemon_restart_scheduled"] = daemon_triggered
         details["container_restarted"] = container_restarted
-        if daemon_error:
+        dashboard_restart_ok = False
+        dashboard_restart_error = None
+        if not cancelled:
+            try:
+                subprocess.run(
+                    ["systemctl", "restart", "blockdag-dashboard"],
+                    check=True,
+                    timeout=45,
+                )
+                dashboard_restart_ok = True
+            except FileNotFoundError:
+                dashboard_restart_error = "systemctl not available"
+            except subprocess.CalledProcessError as exc:
+                dashboard_restart_error = f"exit {exc.returncode}"
+            except subprocess.TimeoutExpired:
+                dashboard_restart_error = "timeout waiting for restart"
+            except Exception as exc:
+                dashboard_restart_error = str(exc)
+        if dashboard_restart_error:
+            details["dashboard_restarted"] = False
+            details["dashboard_restart_error"] = dashboard_restart_error
+            if not cancelled:
+                try:
+                    app.logger.warning("Dashboard restart failed after restore: %s", dashboard_restart_error)
+                except Exception:
+                    pass
+        else:
+            details["dashboard_restarted"] = dashboard_restart_ok
+        if daemon_error and not cancelled:
             message = f"{message} (failed to schedule daemon restart: {daemon_error})"
             status = "error"
-        elif restart_error:
+        elif restart_error and not cancelled:
             message = f"{message} (failed to restart container: {restart_error})"
             status = "error"
+        elif dashboard_restart_error and not cancelled:
+            message = f"{message} (dashboard restart issue: {dashboard_restart_error})"
         _chain_job_finish(status, message, details=details)
         try:
             keep_paths = [CHAIN_DATA_DIR]

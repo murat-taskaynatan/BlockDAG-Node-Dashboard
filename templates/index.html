@@ -67,7 +67,7 @@
 #nodeControlsCard .node-ctrls__actions--chain .btn{min-width:140px;width:auto;flex:0 0 auto;white-space:nowrap;text-align:center}
 #nodeControlsCard .node-ctrls__field--auto input{width:100%;text-align:center}
 #nodeControlsCard .node-ctrls__meta{align-self:flex-start;text-align:left;margin:0;font-size:12px;line-height:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-height:1.2em;display:flex;align-items:center}
-#nodeControlsCard .node-ctrls__meta--status{grid-column:1/-1;margin-left:0;margin-top:2px;text-align:left;height:1.2em}
+#nodeControlsCard .node-ctrls__meta--status{grid-column:1/-1;margin-left:5px;margin-top:2px;text-align:left;height:1.2em}
 #nodeControlsCard .node-ctrls__row{width:100%;display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap}
 #nodeControlsCard .node-ctrls__row--primary{gap:12px}
 #nodeControlsCard .node-ctrls__row--primary .node-ctrls__actions--container{flex:0 0 auto}
@@ -343,7 +343,7 @@ const activitySeriesLabels = {
 };
 const baseChartLabels = { peers: 'Peers', latency: 'RPC Latency (ms)' };
 const NODE_CTRL_REFRESH_MS = 10000;
-const nodeControlState = { enabled:false, hostMode:false, containers:[], nodes:[], activeNode:null, lastFetched:0, chainBackups:[], chainBackupsLastFetched:0, chainJob:null, chainEnabled:false, chainEnabledServer:false, renderedChainJobDigest:'' };
+const nodeControlState = { enabled:false, hostMode:false, containers:[], nodes:[], activeNode:null, lastFetched:0, chainBackups:[], chainBackupsLastFetched:0, chainJob:null, sharedChainJob:null, chainEnabled:false, chainEnabledServer:false, renderedChainJobDigest:'' };
 let backupScanState = { message:'', ok:true };
 let backupScanTimer = null;
 let chainStatusTimer = null;
@@ -423,6 +423,18 @@ function withNodeParam(url){
   return `${url}${separator}node=${encodeURIComponent(currentNodeId)}`;
 }
 
+function responseMatchesNode(payload, nodeId){
+  if (!payload) return true;
+  if (!nodeId) return true;
+  const raw = payload.node || payload.node_id || payload.current_node;
+  if (!raw && !(payload.details && payload.details.node)){
+    return true;
+  }
+  const candidate = raw || payload.details?.node;
+  if (!candidate) return true;
+  return String(candidate).trim() === nodeId;
+}
+
 function disposeChart(chart){
   if (!chart) return;
   const tag = chart._valueTag;
@@ -478,14 +490,7 @@ function buildChainJobMessage(job){
   const details = job.details || {};
   const isRunning = !!(job.active || job.status === 'running');
   if (isRunning && job.type === 'backup'){
-    const name = formatBackupNameDisplay(details.path);
-    const noun = name === 'backup' ? '' : ` ${name}`;
-    const parts = [`Creating backup${noun}`];
-    const started = job.started ? Date.parse(job.started) : NaN;
-    if (Number.isFinite(started)){
-      const elapsedSec = Math.max(0, (Date.now() - started) / 1000);
-      parts.push(`${formatDuration(elapsedSec)} elapsed`);
-    }
+    const parts = ['Creating backup'];
     const percentVal = Number(details.percent);
     if (Number.isFinite(percentVal) && percentVal >= 0){
       parts.push(`${percentVal.toFixed(percentVal >= 10 ? 1 : 2)}%`);
@@ -498,17 +503,18 @@ function buildChainJobMessage(job){
     if (Number.isFinite(totalVal) && totalVal > 0 && !parts.some(p => p.endsWith('%'))){
       const fallbackPercent = sizeVal && totalVal ? (sizeVal / totalVal) * 100 : 0;
       parts.push(`${fallbackPercent.toFixed(fallbackPercent >= 10 ? 1 : 2)}%`);
+    }
+    const etaVal = Number(details.eta);
+    if (Number.isFinite(etaVal) && etaVal > 0){
+      parts.push(`ETA ${formatDuration(etaVal)}`);
+    }
+    const rateVal = Number(details.rate);
+    if (Number.isFinite(rateVal) && rateVal > 0){
+      parts.push(`${formatBytes(rateVal)}/s`);
     }
     return parts.join(' · ');
   } else if (isRunning && job.type === 'restore'){
-    const name = formatBackupNameDisplay(details.backup || details.restored || details.path);
-    const label = name ? `Restoring ${name}` : 'Restoring backup';
-    const parts = [label];
-    const started = job.started ? Date.parse(job.started) : NaN;
-    if (Number.isFinite(started)){
-      const elapsedSec = Math.max(0, (Date.now() - started) / 1000);
-      parts.push(`${formatDuration(elapsedSec)} elapsed`);
-    }
+    const parts = ['Restoring backup'];
     const percentVal = Number(details.percent);
     if (Number.isFinite(percentVal) && percentVal >= 0){
       parts.push(`${percentVal.toFixed(percentVal >= 10 ? 1 : 2)}%`);
@@ -521,6 +527,14 @@ function buildChainJobMessage(job){
     if (Number.isFinite(totalVal) && totalVal > 0 && !parts.some(p => p.endsWith('%'))){
       const fallbackPercent = sizeVal && totalVal ? (sizeVal / totalVal) * 100 : 0;
       parts.push(`${fallbackPercent.toFixed(fallbackPercent >= 10 ? 1 : 2)}%`);
+    }
+    const etaVal = Number(details.eta);
+    if (Number.isFinite(etaVal) && etaVal > 0){
+      parts.push(`ETA ${formatDuration(etaVal)}`);
+    }
+    const rateVal = Number(details.rate);
+    if (Number.isFinite(rateVal) && rateVal > 0){
+      parts.push(`${formatBytes(rateVal)}/s`);
     }
     return parts.join(' · ');
   }
@@ -1237,7 +1251,7 @@ function renderChainControls(){
   }
   if (!select || !backupBtn || !restoreBtn || !deleteBtn || !cancelBtn || !scanBtn) return;
   const backups = Array.isArray(nodeControlState.chainBackups) ? nodeControlState.chainBackups : [];
-  const job = nodeControlState.chainJob || null;
+  const job = nodeControlState.sharedChainJob || nodeControlState.chainJob || null;
   const jobActive = !!(job && (job.active || job.status === 'running'));
   const jobType = jobActive ? job.type : (job ? job.type : '');
   const jobCancelling = !!(job && job.status === 'cancelling');
@@ -1419,12 +1433,30 @@ async function refreshChainBackups(force = false){
     }
     const data = await res.json();
     nodeControlState.chainBackups = Array.isArray(data?.backups) ? data.backups : [];
-    nodeControlState.chainJob = data?.job || null;
+    const rawJob = data?.job || null;
+    const sharedJob = nodeControlState.sharedChainJob;
+    const rawRunning = !!(rawJob && (rawJob.active || rawJob.status === 'running'));
+    const rawHasContainer = !!(rawJob && rawJob.details && typeof rawJob.details === 'object' && (rawJob.details.container || rawJob.details.target_container));
+    let nextShared = sharedJob;
+    if (rawRunning || rawHasContainer){
+      nextShared = rawJob;
+    } else if (!sharedJob || !(sharedJob.active || sharedJob.status === 'running')){
+      nextShared = rawJob;
+    }
+    nodeControlState.sharedChainJob = nextShared || null;
+    if (rawRunning){
+      nodeControlState.chainJob = rawJob;
+    } else if (nextShared && (nextShared.active || nextShared.status === 'running')){
+      nodeControlState.chainJob = nextShared;
+    } else {
+      nodeControlState.chainJob = rawJob || null;
+    }
     nodeControlState.chainBackupsLastFetched = Date.now();
     renderChainControls();
   }catch(err){
-    nodeControlState.chainBackups = [];
-    nodeControlState.chainJob = { active:false, status:'error', message:'Chain backup info unavailable' };
+  nodeControlState.chainBackups = [];
+  nodeControlState.chainJob = { active:false, status:'error', message:'Chain backup info unavailable' };
+  nodeControlState.sharedChainJob = nodeControlState.sharedChainJob && (nodeControlState.sharedChainJob.active || nodeControlState.sharedChainJob.status === 'running') ? nodeControlState.sharedChainJob : null;
     nodeControlState.chainBackupsLastFetched = Date.now();
     renderChainControls();
   }
@@ -1515,10 +1547,17 @@ async function performNodeAction(action){
   const activeNode = getActiveNodeMeta();
   const containerEntry = getActiveContainerEntry();
   let container = activeNode && activeNode.container ? activeNode.container : '';
-  if (action === 'chain_cancel' && !container){
-    const job = nodeControlState.chainJob || null;
-    if (job && job.details && job.details.container){
-      container = job.details.container;
+  if (action === 'chain_cancel'){
+    const sharedJob = nodeControlState.sharedChainJob || nodeControlState.chainJob || null;
+    const jobContainer = sharedJob && sharedJob.details ? (sharedJob.details.container || sharedJob.details.target_container || '') : '';
+    if (jobContainer){
+      container = jobContainer;
+    } else if (!container){
+      const job = nodeControlState.chainJob || null;
+      const fallbackContainer = job && job.details ? (job.details.container || job.details.target_container || '') : '';
+      if (fallbackContainer){
+        container = fallbackContainer;
+      }
     }
   }
   if (!container && !hostMode){
@@ -1527,6 +1566,20 @@ async function performNodeAction(action){
   }
   if (!containerEntry && !hostMode && container && action !== 'chain_cancel'){
     statusSetter(`Container ${container} not available`, false);
+    return;
+  }
+  const rawJob = nodeControlState.chainJob || null;
+  const rawJobDetails = rawJob && typeof rawJob.details === 'object' ? rawJob.details : {};
+  const rawJobContainer = rawJobDetails && (rawJobDetails.container || rawJobDetails.target_container || '');
+  const rawJobType = rawJob ? (rawJob.type || '') : '';
+  const rawJobActive = !!(rawJob && (rawJob.active || rawJob.status === 'running'));
+  if (isChainAction && rawJobActive && action !== 'chain_cancel'){
+    const jobLabel = rawJobType === 'restore' ? 'Restore' : 'Chain operation';
+    if (rawJobContainer && rawJobContainer !== container){
+      statusSetter(`${jobLabel} already in progress for ${rawJobContainer}`, false);
+    } else {
+      statusSetter(`${jobLabel} already in progress`, false);
+    }
     return;
   }
   const hoursInput = document.getElementById('autoRestartHours');
@@ -1840,9 +1893,18 @@ function fmtTime(ms){
 const LOG_LINES_LIMIT = 60;
 
 async function refreshStatus(){
+  const targetNode = currentNodeId;
   try{
     const r = await fetch(withNodeParam('/api/status'), {cache:'no-store'});
     const j = await r.json();
+    if (targetNode !== currentNodeId){
+      return;
+    }
+    if (!responseMatchesNode(j, targetNode)){
+      const other = j && (j.node || j.node_id || j.current_node || j.details?.node) || 'unknown';
+      console.warn(`[status] ignoring payload for ${targetNode || 'active node'}; received ${other}`);
+      return;
+    }
     const pill = document.getElementById('healthLine');
     if (pill){
       const ns = j.node_state || {};
@@ -1907,7 +1969,10 @@ async function refreshStatus(){
         }
         return '';
       })();
-      pill.textContent = detailText ? `${derivedStatus} · ${detailText}` : derivedStatus;
+      const normalizedDetail = detailText.toLowerCase();
+      const derivedLower = derivedStatus.toLowerCase();
+      const detailDisplay = (!detailText || normalizedDetail === 'ok' || normalizedDetail === derivedLower) ? '' : detailText;
+      pill.textContent = detailDisplay ? `${derivedStatus} · ${detailDisplay}` : derivedStatus;
       pill.title = pill.textContent;
       const color = ns.color || (j.ok ? '#25d366' : '#ff5370');
       applyPillStyle(pill, color, 0.2);
@@ -1978,6 +2043,9 @@ async function refreshStatus(){
       uptimeEl.textContent = Number.isFinite(uptime) ? formatDuration(uptime) : '—';
     }
   }catch(e){
+    if (targetNode !== currentNodeId){
+      return;
+    }
     const pill = document.getElementById('healthLine');
     if (pill){
       pill.textContent = 'Unavailable';
@@ -1999,11 +2067,20 @@ async function refreshLogs(){
   if (!el) return;
   const panel = document.getElementById('logsPanel');
   if (panel && !panel.open) return;
+  const targetNode = currentNodeId;
   try{
     const logsUrl = withNodeParam(`/api/logs/recent?limit=${LOG_LINES_LIMIT}`);
     const res = await fetch(logsUrl, { cache:'no-store' });
     if (!res.ok) throw new Error(res.status || 'logs fetch failed');
     const data = await res.json();
+    if (targetNode !== currentNodeId){
+      return;
+    }
+    if (!responseMatchesNode(data, targetNode)){
+      const other = data && (data.node || data.node_id || data.current_node || data.details?.node) || 'unknown';
+      console.warn(`[logs] ignoring payload for ${targetNode || 'active node'}; received ${other}`);
+      return;
+    }
     const lines = Array.isArray(data.lines) ? data.lines : [];
     const text = lines.join('\n');
     if (!text){
@@ -2019,12 +2096,16 @@ async function refreshLogs(){
       el.scrollTop = el.scrollHeight;
     }
   }catch(err){
+    if (targetNode !== currentNodeId){
+      return;
+    }
     el.textContent = 'Failed to load logs';
   }
 }
 
 async function refreshCharts(){
   if (!window.Chart) return;
+  const targetNode = currentNodeId;
   const fetchJSON = path => fetch(withNodeParam(path)).then(r => r.json()).catch(() => null);
   const [h,p,l,a] = await Promise.all([
     fetchJSON('/api/chart/height'),
@@ -2032,85 +2113,113 @@ async function refreshCharts(){
     fetchJSON('/api/chart/latency'),
     fetchJSON('/api/chart/activity'),
   ]);
+  if (targetNode !== currentNodeId){
+    return;
+  }
+  const matches = payload => responseMatchesNode(payload, targetNode);
+  const logMismatch = (kind, payload) => {
+    if (!payload) return;
+    const other = payload.node || payload.node_id || payload.current_node || payload.details?.node || 'unknown';
+    console.warn(`[charts] ignoring ${kind} payload for ${targetNode}; received ${other}`);
+  };
 
-  if (h){
-    updateHeightChart(h.labels || [], h.local || [], h.remote || []);
-  }else{
-    updateHeightChart([], [], []);
-  }
-  if (p){
-    updateLineChart('peers', p.labels || [], p.data || []);
-  }
-  if (l){
-    updateLineChart('latency', l.labels || [], l.data || []);
-  }
-  if (a){
-    const labels = Array.isArray(a.labels) ? a.labels : [];
-    const totalsFallback = Array.isArray(a.total) ? a.total : [];
-    const activityRateRaw = Array.isArray(a.activity_rate) ? a.activity_rate
-      : Array.isArray(a.rate) ? a.rate
-      : deriveRateSeries(labels, totalsFallback);
-    const syncRateRaw = Array.isArray(a.sync_rate) ? a.sync_rate
-      : Array.isArray(a.height_dx) ? a.height_dx
-      : [];
-    const activityRateSeries = alignSeriesLength(activityRateRaw, labels.length);
-    let syncRateSeries = alignSeriesLength(syncRateRaw, labels.length);
-    if (!syncRateSeries.some(v => Number.isFinite(v))){
-      const heightSeries = Array.isArray(a.height_local) ? a.height_local : [];
-      syncRateSeries = alignSeriesLength(deriveRateSeries(labels, heightSeries), labels.length);
+  if (matches(h)){
+    if (h){
+      updateHeightChart(h.labels || [], h.local || [], h.remote || []);
+    }else{
+      updateHeightChart([], [], []);
     }
-    const ctx = document.getElementById('activityChart')?.getContext('2d');
-    if (ctx){
-      if (charts.activity && charts.activity.data.datasets.length !== 2){
-        disposeChart(charts.activity);
-        charts.activity = null;
+  } else if (h){
+    logMismatch('height', h);
+  }
+
+  if (matches(p)){
+    if (p){
+      updateLineChart('peers', p.labels || [], p.data || []);
+    }
+  } else if (p){
+    logMismatch('peers', p);
+  }
+
+  if (matches(l)){
+    if (l){
+      updateLineChart('latency', l.labels || [], l.data || []);
+    }
+  } else if (l){
+    logMismatch('latency', l);
+  }
+
+  if (matches(a)){
+    if (a){
+      const labels = Array.isArray(a.labels) ? a.labels : [];
+      const totalsFallback = Array.isArray(a.total) ? a.total : [];
+      const activityRateRaw = Array.isArray(a.activity_rate) ? a.activity_rate
+        : Array.isArray(a.rate) ? a.rate
+        : deriveRateSeries(labels, totalsFallback);
+      const syncRateRaw = Array.isArray(a.sync_rate) ? a.sync_rate
+        : Array.isArray(a.height_dx) ? a.height_dx
+        : [];
+      const activityRateSeries = alignSeriesLength(activityRateRaw, labels.length);
+      let syncRateSeries = alignSeriesLength(syncRateRaw, labels.length);
+      if (!syncRateSeries.some(v => Number.isFinite(v))){
+        const heightSeries = Array.isArray(a.height_local) ? a.height_local : [];
+        syncRateSeries = alignSeriesLength(deriveRateSeries(labels, heightSeries), labels.length);
       }
-      if (!charts.activity){
-        charts.activity = new Chart(ctx, {
-          type:'line',
-          data:{
-            labels,
-            datasets:[
-              { label:activitySeriesLabels.activity, data:activityRateSeries, fill:false, tension:0.25, pointRadius:0, borderWidth:2 },
-              { label:activitySeriesLabels.sync, data:syncRateSeries, fill:false, tension:0.25, pointRadius:0, borderWidth:2 },
-            ]
-          },
-          options:{
-            animation:false, responsive:true, maintainAspectRatio:false,
-            scales:{ x:{ ticks:{display:false}}, y:{ beginAtZero:true }},
-            plugins:{
-              legend:{ display:true },
-              legendOffset:{ x:-80 }
+      const ctx = document.getElementById('activityChart')?.getContext('2d');
+      if (ctx){
+        if (charts.activity && charts.activity.data.datasets.length !== 2){
+          disposeChart(charts.activity);
+          charts.activity = null;
+        }
+        if (!charts.activity){
+          charts.activity = new Chart(ctx, {
+            type:'line',
+            data:{
+              labels,
+              datasets:[
+                { label:activitySeriesLabels.activity, data:activityRateSeries, fill:false, tension:0.25, pointRadius:0, borderWidth:2 },
+                { label:activitySeriesLabels.sync, data:syncRateSeries, fill:false, tension:0.25, pointRadius:0, borderWidth:2 },
+              ]
+            },
+            options:{
+              animation:false, responsive:true, maintainAspectRatio:false,
+              scales:{ x:{ ticks:{display:false}}, y:{ beginAtZero:true }},
+              plugins:{
+                legend:{ display:true },
+                legendOffset:{ x:-80 }
+              }
             }
-          }
-        });
-        charts.activity._valueTag = null;
-      }else{
-        charts.activity.data.labels = labels;
-        charts.activity.data.datasets[0].label = activitySeriesLabels.activity;
-        charts.activity.data.datasets[0].data = activityRateSeries;
-        charts.activity.data.datasets[1].label = activitySeriesLabels.sync;
-        charts.activity.data.datasets[1].data = syncRateSeries;
-        charts.activity.update('none');
+          });
+          charts.activity._valueTag = null;
+        }else{
+          charts.activity.data.labels = labels;
+          charts.activity.data.datasets[0].label = activitySeriesLabels.activity;
+          charts.activity.data.datasets[0].data = activityRateSeries;
+          charts.activity.data.datasets[1].label = activitySeriesLabels.sync;
+          charts.activity.data.datasets[1].data = syncRateSeries;
+          charts.activity.update('none');
+        }
+        renderActivityValue(activityRateSeries, syncRateSeries);
       }
-      renderActivityValue(activityRateSeries, syncRateSeries);
+    } else if (charts.activity){
+      charts.activity.data.labels = [];
+      if (charts.activity.data.datasets.length){
+        const ds1 = charts.activity.data.datasets[0];
+        if (ds1){
+          ds1.label = activitySeriesLabels.activity;
+          ds1.data = [];
+        }
+        const ds2 = charts.activity.data.datasets[1];
+        if (ds2){
+          ds2.label = activitySeriesLabels.sync;
+          ds2.data = [];
+        }
+      }
+      charts.activity.update('none');
+      renderActivityValue([], []);
     }
-  }else if (charts.activity){
-    charts.activity.data.labels = [];
-    if (charts.activity.data.datasets.length){
-      const ds1 = charts.activity.data.datasets[0];
-      if (ds1){
-        ds1.label = activitySeriesLabels.activity;
-        ds1.data = [];
-      }
-      const ds2 = charts.activity.data.datasets[1];
-      if (ds2){
-        ds2.label = activitySeriesLabels.sync;
-        ds2.data = [];
-      }
-    }
-    charts.activity.update('none');
-    renderActivityValue([], []);
+  } else if (a){
+    logMismatch('activity', a);
   }
 }
 async function tick(){
@@ -2120,10 +2229,19 @@ async function tick(){
 }
 async function preloadHistory(){
   if (!window.Chart) return;
+  const targetNode = currentNodeId;
   try{
     const res = await fetch(withNodeParam('/api/history'), { cache:'no-store' });
     if (!res.ok) throw new Error(res.status || 'history response not ok');
     const hist = await res.json();
+    if (targetNode !== currentNodeId){
+      return;
+    }
+    if (!responseMatchesNode(hist, targetNode)){
+      const other = hist && (hist.node || hist.node_id || hist.current_node || hist.details?.node) || 'unknown';
+      console.warn(`[history] ignoring preload payload for ${targetNode || 'active node'}; received ${other}`);
+      return;
+    }
     const labelsFor = key => (hist[key]?.labels) || [];
     const seriesFor = key => (hist[key]?.series) || [];
     const primeLine = key => {
