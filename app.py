@@ -3769,6 +3769,7 @@ def _chain_restore_task(container_name: str, backup_name: str):
     total_bytes = 0
     started_ts = time.time()
     base_read = 0
+    target_total = 0.0
     try:
         _check_chain_job_cancelled()
         _ensure_backup_dir()
@@ -3786,6 +3787,7 @@ def _chain_restore_task(container_name: str, backup_name: str):
             total_bytes = 0
         if total_bytes:
             details["total"] = total_bytes
+            target_total = float(total_bytes) * RESTORE_PROGRESS_EXPANSION_FACTOR
         parent.mkdir(parents=True, exist_ok=True)
         _cleanup_chain_restore_temp_dirs(parent, keep=[CHAIN_DATA_DIR])
         was_running = _stop_container_for_job(container_name)
@@ -3843,20 +3845,15 @@ def _chain_restore_task(container_name: str, backup_name: str):
                         dir_size_bytes = None
                     if dir_size_bytes is not None:
                         read_bytes = max(read_bytes or 0.0, float(dir_size_bytes or 0.0))
+                        target_total = max(target_total, float(dir_size_bytes) * 1.02)
                         last_read = read_bytes
                     elapsed = time.time() - started_ts
-                    estimated_total = float(total_bytes or 0) * RESTORE_PROGRESS_EXPANSION_FACTOR
-                    if dir_size_bytes:
-                        estimated_total = max(estimated_total, float(dir_size_bytes) * RESTORE_PROGRESS_EXPANSION_FACTOR)
-                    if read_bytes:
-                        estimated_total = max(estimated_total, float(read_bytes) * RESTORE_PROGRESS_EXPANSION_FACTOR)
-                    if estimated_total <= 0:
-                        estimated_total = float(max(total_bytes or 0, dir_size_bytes or 0, read_bytes or 0, 1)) * RESTORE_PROGRESS_EXPANSION_FACTOR
-                    progress_total = estimated_total
-                    if dir_size_bytes:
-                        progress_total = max(progress_total, float(dir_size_bytes) * RESTORE_PROGRESS_EXPANSION_FACTOR)
-                    if read_bytes:
-                        progress_total = max(progress_total, float(read_bytes) * RESTORE_PROGRESS_EXPANSION_FACTOR)
+                    if total_bytes <= 0 and read_bytes:
+                        target_total = max(target_total, float(read_bytes) * RESTORE_PROGRESS_EXPANSION_FACTOR)
+                    if target_total <= 0:
+                        base_total = max(total_bytes or 0, dir_size_bytes or 0, read_bytes or 0, 1)
+                        target_total = float(base_total) * RESTORE_PROGRESS_EXPANSION_FACTOR
+                    progress_total = target_total
                     rate = None
                     eta = None
                     remaining_bytes = None
@@ -3920,6 +3917,7 @@ def _chain_restore_task(container_name: str, backup_name: str):
             "__progress_locked": True,
         })
         total_final = max(
+            target_total,
             float(total_bytes or 0) * RESTORE_PROGRESS_EXPANSION_FACTOR,
             float(size_bytes or 0),
             float(dir_size_bytes or 0),
