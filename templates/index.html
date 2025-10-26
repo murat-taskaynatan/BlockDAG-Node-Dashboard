@@ -1728,6 +1728,9 @@ async function performNodeAction(action){
   const rawJob = nodeControlState.chainJob || null;
   const rawJobDetails = rawJob && typeof rawJob.details === 'object' ? rawJob.details : {};
   const rawJobContainer = rawJobDetails && (rawJobDetails.container || rawJobDetails.target_container || '');
+  const rawJobNodeId = rawJobDetails && (rawJobDetails.node || rawJobDetails.node_id || rawJobDetails.nodeId)
+    ? String(rawJobDetails.node || rawJobDetails.node_id || rawJobDetails.nodeId).trim()
+    : '';
   const rawJobType = rawJob ? (rawJob.type || '') : '';
   const rawJobActive = !!(rawJob && (rawJob.active || rawJob.status === 'running'));
   if (isChainAction && rawJobActive && action !== 'chain_cancel'){
@@ -1800,6 +1803,9 @@ async function performNodeAction(action){
   } else if (action === 'chain_cancel'){
     successLabel = 'Chain cancel';
     statusMessage = container ? `Stopping chain operation for ${container}` : 'Stopping chain operation';
+    if (rawJobNodeId){
+      payload.node = rawJobNodeId;
+    }
   }
   let finalMessage = '';
   let finalOk = true;
