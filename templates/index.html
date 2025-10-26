@@ -1050,6 +1050,18 @@ function setNodeControlButtonsDisabled(disabled){
   }
 }
 
+function setButtonDisabledState(btn, disabled, { keepWhenBusy = false } = {}){
+  if (!btn) return;
+  if (keepWhenBusy && btn.dataset && btn.dataset.busy === '1'){
+    return;
+  }
+  const shouldDisable = !!disabled;
+  btn.disabled = shouldDisable;
+  if (btn.style){
+    btn.style.opacity = shouldDisable ? '0.45' : '1';
+  }
+}
+
 function setChainControlStatus(msg, ok = true){
   const el = document.getElementById('chainControlStatus');
   if (!el) return;
@@ -1127,7 +1139,7 @@ function setBackupScanStatus(msg, ok = true){
 
 function setChainControlButtonsDisabled(disabled){
   document.querySelectorAll('#nodeControlsCard [data-node-action^="chain_"]').forEach(btn => {
-    btn.disabled = !!disabled;
+    setButtonDisabledState(btn, disabled);
   });
   const select = document.getElementById('chainBackupSelect');
   if (select){
@@ -1451,25 +1463,21 @@ function renderChainControls(){
     }
     setChainControlStatus(statusText, job.status !== 'error');
     nodeControlState.renderedChainJobDigest = jobDigest || statusText || '';
-    backupBtn.disabled = true;
-    restoreBtn.disabled = true;
-    deleteBtn.disabled = true;
-    cancelBtn.disabled = jobCancelling;
+    setButtonDisabledState(backupBtn, true);
+    setButtonDisabledState(restoreBtn, true);
+    setButtonDisabledState(deleteBtn, true);
+    setButtonDisabledState(cancelBtn, jobCancelling);
     cancelBtn.textContent = jobCancelling ? 'Stopping…' : 'Stop';
     select.disabled = true;
-    if (scanBtn && scanBtn.dataset.busy !== '1'){
-      scanBtn.disabled = true;
-    }
+    setButtonDisabledState(scanBtn, true, { keepWhenBusy: true });
   } else {
     const enabled = !!nodeControlState.chainEnabled;
-    backupBtn.disabled = !enabled;
-    restoreBtn.disabled = !enabled || !select.value || !hasBackups;
-    deleteBtn.disabled = !enabled || !select.value || !hasBackups;
-    cancelBtn.disabled = true;
+    setButtonDisabledState(backupBtn, !enabled);
+    setButtonDisabledState(restoreBtn, !enabled || !select.value || !hasBackups);
+    setButtonDisabledState(deleteBtn, !enabled || !select.value || !hasBackups);
+    setButtonDisabledState(cancelBtn, true);
     cancelBtn.textContent = 'Stop';
-    if (scanBtn && scanBtn.dataset.busy !== '1'){
-      scanBtn.disabled = false;
-    }
+    setButtonDisabledState(scanBtn, false, { keepWhenBusy: true });
     if (job && (jobDisplayMessage || job.message)){
       backupScanState = { message:'', ok:true };
       let statusText = jobDisplayMessage || job.message;
