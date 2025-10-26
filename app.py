@@ -1357,6 +1357,20 @@ def _restart_unit_info(container):
     }
 
 
+def _schedule_daemon_restart(container: str) -> bool:
+    if not container or not SYSTEMCTL_BIN:
+        return False
+    info = _restart_unit_info(container)
+    if not (os.path.exists(info["service_path"]) or os.path.exists(info["timer_path"])):
+        return False
+    result = _systemctl_cmd(["start", info["service"]])
+    if not result:
+        return False
+    if result.returncode != 0:
+        raise RuntimeError(result.stderr.strip() or result.stdout.strip() or f"Failed to schedule daemon restart for {container}")
+    return True
+
+
 def _read_timer_interval(timer_path):
     if not os.path.exists(timer_path):
         return None
@@ -3324,6 +3338,17 @@ def _start_container_for_job(name: str) -> bool:
     return True
 
 
+def _restart_container_for_job(name: str) -> bool:
+    if not name:
+        return False
+    if not ALLOW_DOCKER:
+        raise RuntimeError("Docker control disabled")
+    result = docker_action(name, "restart")
+    if not result.get("ok"):
+        raise RuntimeError(result.get("error") or f"Failed to restart container {name}")
+    return True
+
+
 def _unique_temp_path(base: Path) -> Path:
     candidate = base
     counter = 1
@@ -3574,7 +3599,12 @@ def _chain_backup_task(container_name: str):
 def _chain_restore_task(container_name: str, backup_name: str):
     was_running = False
     temp_backup = None
-    details = {"container": container_name, "backup": backup_name}
+    details = {
+        "container": container_name,
+        "backup": backup_name,
+        "container_restarted": False,
+        "daemon_restart_scheduled": False,
+    }
     status = "error"
     message = ''
     backup_path = (CHAIN_BACKUP_DIR / backup_name).resolve()
@@ -3603,6 +3633,7 @@ def _chain_restore_task(container_name: str, backup_name: str):
         parent.mkdir(parents=True, exist_ok=True)
         _cleanup_chain_restore_temp_dirs(parent, keep=[CHAIN_DATA_DIR])
         was_running = _stop_container_for_job(container_name)
+        details["container_was_running"] = was_running
         _check_chain_job_cancelled()
         if CHAIN_DATA_DIR.exists():
             temp_backup = _unique_temp_path(parent / f"{CHAIN_DATA_DIR.name}.pre-restore")
@@ -3706,16 +3737,31 @@ def _chain_restore_task(container_name: str, backup_name: str):
             shutil.move(str(temp_backup), str(CHAIN_DATA_DIR))
             temp_backup = None
     finally:
+        daemon_triggered = False
         restart_error = None
+        daemon_error = None
         if temp_backup and temp_backup.exists() and not CHAIN_DATA_DIR.exists():
             shutil.move(str(temp_backup), str(CHAIN_DATA_DIR))
             temp_backup = None
-        if was_running:
+        if container_name:
             try:
-                _start_container_for_job(container_name)
+                daemon_triggered = _schedule_daemon_restart(container_name)
+            except Exception as exc:
+                daemon_error = str(exc)
+        container_restarted = False
+        if daemon_triggered:
+            container_restarted = True
+        elif container_name:
+            try:
+                container_restarted = bool(_restart_container_for_job(container_name))
             except Exception as exc:
                 restart_error = str(exc)
-        if restart_error:
+        details["daemon_restart_scheduled"] = daemon_triggered
+        details["container_restarted"] = container_restarted
+        if daemon_error:
+            message = f"{message} (failed to schedule daemon restart: {daemon_error})"
+            status = "error"
+        elif restart_error:
             message = f"{message} (failed to restart container: {restart_error})"
             status = "error"
         _chain_job_finish(status, message, details=details)
