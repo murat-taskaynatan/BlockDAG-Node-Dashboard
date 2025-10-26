@@ -525,8 +525,7 @@ async function locateActiveChainJob(excludeNodeId){
     if (!job) continue;
     const status = (job.status || '').toString().toLowerCase();
     const active = !!(job.active || status === 'running' || status === 'cancelling');
-    const hasContainer = !!(job.details && (job.details.container || job.details.target_container));
-    if (active || hasContainer){
+    if (active){
       return { job, node: node.id, backups: payload.backups || [] };
     }
   }
@@ -1553,11 +1552,11 @@ async function refreshChainBackups(force = false){
     const rawRunning = !!(rawJob && (rawJob.active || rawStatus === 'running' || rawStatus === 'cancelling'));
     const rawHasContainer = !!(rawJob && rawJob.details && typeof rawJob.details === 'object' && (rawJob.details.container || rawJob.details.target_container));
     let locatedJob = null;
-    if (!rawRunning && !rawHasContainer){
+    if (!rawRunning){
       locatedJob = await locateActiveChainJob(currentNodeId);
     }
     let nextShared = sharedJob;
-    if (rawRunning || rawHasContainer){
+    if (rawRunning){
       nextShared = rawJob;
     } else if (locatedJob && locatedJob.job){
       nextShared = locatedJob.job;
