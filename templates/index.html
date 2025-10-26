@@ -343,7 +343,9 @@ const activitySeriesLabels = {
 };
 const baseChartLabels = { peers: 'Peers', latency: 'RPC Latency (ms)' };
 const NODE_CTRL_REFRESH_MS = 10000;
+const CHAIN_JOB_ACTIVE_REFRESH_MS = 2500;
 const nodeControlState = { enabled:false, hostMode:false, containers:[], nodes:[], activeNode:null, lastFetched:0, chainBackups:[], chainBackupsLastFetched:0, chainJob:null, sharedChainJob:null, chainEnabled:false, chainEnabledServer:false, renderedChainJobDigest:'' };
+let chainJobPollTimer = null;
 let backupScanState = { message:'', ok:true };
 let backupScanTimer = null;
 let chainStatusTimer = null;
@@ -455,6 +457,21 @@ function resetCharts(){
 }
 
 function updateActiveNodeIndicator(){
+}
+
+function scheduleChainJobFollowup(shouldPoll){
+  if (chainJobPollTimer){
+    clearTimeout(chainJobPollTimer);
+    chainJobPollTimer = null;
+  }
+  if (!shouldPoll){
+    return;
+  }
+  chainJobPollTimer = setTimeout(() => {
+    refreshChainBackups(true).catch(() => {
+      scheduleChainJobFollowup(true);
+    });
+  }, CHAIN_JOB_ACTIVE_REFRESH_MS);
 }
 
 function setActiveNode(nodeId, opts = {}){
@@ -1320,9 +1337,24 @@ function renderChainControls(){
     select.insertBefore(pendingOpt, select.firstChild || null);
     select.value = pendingOpt.value;
   }
+  const jobDetails = job && job.details ? job.details : {};
+  const jobContainerName = (jobDetails.container || jobDetails.target_container || '').trim();
+  const activeNodeMeta = getActiveNodeMeta();
+  const activeNodeContainer = activeNodeMeta && activeNodeMeta.container ? activeNodeMeta.container.trim() : '';
+  const jobActiveOnThisNode = jobActive && (
+    !jobContainerName ||
+    !activeNodeContainer ||
+    jobContainerName === activeNodeContainer
+  );
+  const showProgressDetails = !jobActive || jobType !== 'restore' || jobActiveOnThisNode;
+  const jobDisplayMessage = showProgressDetails ? jobMessage : '';
   if (jobActive){
     backupScanState = { message:'', ok:true };
-    const statusText = jobMessage || job.message || `Chain ${jobType || 'operation'} in progress…`;
+    let statusText = jobDisplayMessage || job.message || `Chain ${jobType || 'operation'} in progress…`;
+    if (jobActive && jobType === 'restore' && !jobActiveOnThisNode){
+      const label = jobContainerName || 'another node';
+      statusText = `Restore running on ${label}`;
+    }
     setChainControlStatus(statusText, job.status !== 'error');
     nodeControlState.renderedChainJobDigest = jobDigest || statusText || '';
     backupBtn.disabled = true;
@@ -1344,9 +1376,9 @@ function renderChainControls(){
     if (scanBtn && scanBtn.dataset.busy !== '1'){
       scanBtn.disabled = false;
     }
-    if (job && (jobMessage || job.message)){
+    if (job && (jobDisplayMessage || job.message)){
       backupScanState = { message:'', ok:true };
-      const statusText = jobMessage || job.message;
+      let statusText = jobDisplayMessage || job.message;
       const digest = jobDigest || statusText || '';
       if (!digest || digest !== nodeControlState.renderedChainJobDigest){
         setChainControlStatus(statusText, job.status !== 'error');
@@ -1423,7 +1455,16 @@ async function refreshNodeControls(force = false){
 
 async function refreshChainBackups(force = false){
   const now = Date.now();
-  if (!force && now - (nodeControlState.chainBackupsLastFetched || 0) < NODE_CTRL_REFRESH_MS){
+  const activeJob = (() => {
+    const job = nodeControlState.chainJob || nodeControlState.sharedChainJob;
+    if (!job) return false;
+    return !!(job.active || job.status === 'running');
+  })();
+  const refreshWindow = activeJob ? CHAIN_JOB_ACTIVE_REFRESH_MS : NODE_CTRL_REFRESH_MS;
+  if (!force && now - (nodeControlState.chainBackupsLastFetched || 0) < refreshWindow){
+    if (activeJob){
+      scheduleChainJobFollowup(true);
+    }
     return;
   }
   try{
@@ -1453,12 +1494,15 @@ async function refreshChainBackups(force = false){
     }
     nodeControlState.chainBackupsLastFetched = Date.now();
     renderChainControls();
+    const jobActiveNext = !!(nodeControlState.chainJob && (nodeControlState.chainJob.active || nodeControlState.chainJob.status === 'running'));
+    scheduleChainJobFollowup(jobActiveNext);
   }catch(err){
   nodeControlState.chainBackups = [];
   nodeControlState.chainJob = { active:false, status:'error', message:'Chain backup info unavailable' };
   nodeControlState.sharedChainJob = nodeControlState.sharedChainJob && (nodeControlState.sharedChainJob.active || nodeControlState.sharedChainJob.status === 'running') ? nodeControlState.sharedChainJob : null;
     nodeControlState.chainBackupsLastFetched = Date.now();
     renderChainControls();
+    scheduleChainJobFollowup(false);
   }
 }
 
