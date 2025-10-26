@@ -3221,6 +3221,16 @@ def _chain_job_progress(message: str, details=None):
                         details["percent"] = coerced_prev
                 except Exception:
                     pass
+            if "size" in details:
+                try:
+                    details["size"] = max(float(details["size"]), float(current.get("size") or 0.0))
+                except Exception:
+                    pass
+            if "total" in details:
+                try:
+                    details["total"] = max(float(details["total"]), float(current.get("total") or 0.0))
+                except Exception:
+                    pass
             current.update(details)
             _chain_job_state["details"] = current
 
@@ -3910,6 +3920,7 @@ def _chain_restore_task(container_name: str, backup_name: str):
             "dir_size": dir_size_bytes,
             "elapsed": elapsed,
             "percent": 100.0,
+            "__progress_locked": True,
         })
         total_final = max(
             float(total_bytes or 0) * RESTORE_PROGRESS_EXPANSION_FACTOR,

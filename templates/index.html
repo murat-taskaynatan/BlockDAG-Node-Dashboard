@@ -580,6 +580,7 @@ function buildChainJobMessage(job){
     return job.message || 'Canceling chain backup operation…';
   }
   const details = job.details || {};
+  const progressLocked = !!details.__progress_locked;
   const isRunning = !!(job.active || job.status === 'running');
   if (isRunning && job.type === 'backup'){
     const parts = ['Creating backup'];
@@ -604,6 +605,9 @@ function buildChainJobMessage(job){
     if (Number.isFinite(rateVal) && rateVal > 0){
       parts.push(`${formatBytes(rateVal)}/s`);
     }
+    if (progressLocked){
+      parts.push('(finalizing)');
+    }
     return parts.join(' · ');
   } else if (isRunning && job.type === 'restore'){
     const parts = ['Restoring backup'];
@@ -627,6 +631,9 @@ function buildChainJobMessage(job){
     const rateVal = Number(details.rate);
     if (Number.isFinite(rateVal) && rateVal > 0){
       parts.push(`${formatBytes(rateVal)}/s`);
+    }
+    if (progressLocked){
+      parts.push('(finalizing)');
     }
     return parts.join(' · ');
   }
