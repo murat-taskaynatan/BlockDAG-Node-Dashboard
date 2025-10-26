@@ -1569,7 +1569,7 @@ async function refreshChainBackups(force = false){
     } else if (nextShared && (nextShared.active || nextShared.status === 'running' || nextShared.status === 'cancelling')){
       nodeControlState.chainJob = nextShared;
     } else {
-      nodeControlState.chainJob = rawJob || null;
+      nodeControlState.chainJob = null;
     }
     const jobDetails = (nodeControlState.chainJob && nodeControlState.chainJob.details) || {};
     const jobNodeId = (jobDetails.node || jobDetails.node_id || jobDetails.nodeId || '').toString().trim();
@@ -1586,10 +1586,6 @@ async function refreshChainBackups(force = false){
             autoSelectChainJobNode(targetNode.id);
           }
         }
-      }
-    } else if (locatedJob && locatedJob.job){
-      if (locatedJob.node && locatedJob.node !== currentNodeId){
-        autoSelectChainJobNode(locatedJob.node);
       }
     }
     nodeControlState.chainBackupsLastFetched = Date.now();
