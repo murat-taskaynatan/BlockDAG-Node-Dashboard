@@ -1269,7 +1269,7 @@ function describeAutoBackup(entry){
   const hours = Number.isFinite(info.interval_hours) ? Math.max(1, Math.round(info.interval_hours)) : null;
   const base = hours ? `${hours}h` : (info.interval || 'unknown');
   const limit = Number.isFinite(info.max_backups) && info.max_backups > 0 ? Math.round(info.max_backups) : null;
-  const limitText = limit ? ` · keep ${limit}` : '';
+  const limitText = limit ? ` · keep ${limit} max` : '';
   if (info.enabled){
     return `Auto backup: every ${base}${limitText}${info.active ? ' (active)' : ''}`;
   }
