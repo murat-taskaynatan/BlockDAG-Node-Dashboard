@@ -3207,6 +3207,9 @@ def _chain_job_progress(message: str, details=None):
         _chain_job_state["message"] = message
         if details:
             current = dict(_chain_job_state.get("details") or {})
+            if "node" not in details and "node" in current:
+                details = dict(details)
+                details["node"] = current.get("node")
             prev_percent = current.get("percent")
             new_percent = details.get("percent") if isinstance(details, dict) else None
             if prev_percent is not None and new_percent is not None:
@@ -4058,8 +4061,9 @@ def trigger_chain_backup(container_name: str, ctx: NodeContext):
         except Exception as exc:
             return False, str(exc)
         note = f"Preparing chain backup for {target_container}" if target_container else "Preparing chain backup"
+        details = {"container": target_container, "node": ctx.id}
         try:
-            _chain_job_start("backup", f"{note}…", {"container": target_container})
+            _chain_job_start("backup", f"{note}…", details)
         except RuntimeError as exc:
             return False, str(exc)
         def runner():
@@ -4089,8 +4093,9 @@ def trigger_chain_restore(container_name: str, backup_name: str, ctx: NodeContex
         if not backup_path.exists():
             return False, f"Backup not found: {backup_name}"
         note = f"Restoring chain data from {backup_name}" if backup_name else "Restoring chain data"
+        details = {"container": target_container, "backup": backup_name, "node": ctx.id}
         try:
-            _chain_job_start("restore", f"{note}…", {"container": target_container, "backup": backup_name})
+            _chain_job_start("restore", f"{note}…", details)
         except RuntimeError as exc:
             return False, str(exc)
         def runner():
@@ -4117,8 +4122,9 @@ def trigger_chain_delete(container_name: str, backup_name: str, ctx: NodeContext
         if not backup_path.exists():
             return False, f"Backup not found: {backup_name}"
         note = f"Deleting chain backup {backup_name}" if backup_name else "Deleting chain backup"
+        details = {"container": target_container, "backup": backup_name, "node": ctx.id}
         try:
-            _chain_job_start("delete", f"{note}…", {"container": target_container, "backup": backup_name})
+            _chain_job_start("delete", f"{note}…", details)
         except RuntimeError as exc:
             return False, str(exc)
         def runner():

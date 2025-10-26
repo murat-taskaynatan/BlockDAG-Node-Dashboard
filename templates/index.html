@@ -351,6 +351,7 @@ let backupScanTimer = null;
 let chainStatusTimer = null;
 let suppressChainStatusTimer = false;
 const BACKUP_STATUS_DEFAULT = '';
+let chainJobAutoSelect = false;
 
 function _showDefaultBackupStatus(){
   if (backupScanTimer){
@@ -425,6 +426,12 @@ function withNodeParam(url){
   return `${url}${separator}node=${encodeURIComponent(currentNodeId)}`;
 }
 
+function withExplicitNodeParam(url, nodeId){
+  if (!nodeId) return withNodeParam(url);
+  const separator = url.includes('?') ? '&' : '?';
+  return `${url}${separator}node=${encodeURIComponent(nodeId)}`;
+}
+
 function responseMatchesNode(payload, nodeId){
   if (!payload) return true;
   if (!nodeId) return true;
@@ -488,6 +495,52 @@ function isChainJobPollingActive(){
     return true;
   }
   return false;
+}
+
+async function fetchChainBackupsForNode(nodeId){
+  if (!nodeId) return null;
+  try{
+    const res = await fetch(withExplicitNodeParam('/api/chain/backups', nodeId), { cache:'no-store' });
+    if (!res.ok){
+      return null;
+    }
+    const data = await res.json().catch(() => null);
+    if (!data || typeof data !== 'object') return null;
+    data._node = nodeId;
+    return data;
+  }catch(err){
+    return null;
+  }
+}
+
+async function locateActiveChainJob(excludeNodeId){
+  const nodes = Array.isArray(knownNodes) ? knownNodes : [];
+  for (const node of nodes){
+    if (!node || !node.id) continue;
+    if (excludeNodeId && node.id === excludeNodeId) continue;
+    const payload = await fetchChainBackupsForNode(node.id);
+    if (!payload) continue;
+    const job = payload.job || null;
+    if (!job) continue;
+    const status = (job.status || '').toString().toLowerCase();
+    const active = !!(job.active || status === 'running' || status === 'cancelling');
+    const hasContainer = !!(job.details && (job.details.container || job.details.target_container));
+    if (active || hasContainer){
+      return { job, node: node.id, backups: payload.backups || [] };
+    }
+  }
+  return null;
+}
+
+function autoSelectChainJobNode(nodeId){
+  if (!nodeId || nodeId === currentNodeId) return;
+  if (chainJobAutoSelect) return;
+  chainJobAutoSelect = true;
+  try{
+    setActiveNode(nodeId);
+  } finally {
+    chainJobAutoSelect = false;
+  }
 }
 
 function setActiveNode(nodeId, opts = {}){
@@ -1354,22 +1407,23 @@ function renderChainControls(){
     select.value = pendingOpt.value;
   }
   const jobDetails = job && job.details ? job.details : {};
+  const jobNodeId = (jobDetails.node || jobDetails.node_id || jobDetails.nodeId || '').toString().trim();
   const jobContainerName = (jobDetails.container || jobDetails.target_container || '').trim();
   const activeNodeMeta = getActiveNodeMeta();
   const activeNodeContainer = activeNodeMeta && activeNodeMeta.container ? activeNodeMeta.container.trim() : '';
   const jobActiveOnThisNode = jobActive && (
-    !jobContainerName ||
-    !activeNodeContainer ||
-    jobContainerName === activeNodeContainer
+    (jobNodeId && jobNodeId === currentNodeId) ||
+    (!jobNodeId && (!jobContainerName || !activeNodeContainer || jobContainerName === activeNodeContainer))
   );
+  const jobNodeMeta = jobNodeId ? (knownNodes || []).find(node => node && node.id === jobNodeId) : null;
+  const jobNodeDisplay = jobNodeMeta ? (jobNodeMeta.label || jobNodeMeta.container || jobNodeMeta.id) : (jobContainerName || jobNodeId || 'another node');
   const showProgressDetails = !jobActive || jobType !== 'restore' || jobActiveOnThisNode;
   const jobDisplayMessage = showProgressDetails ? jobMessage : '';
   if (jobActive){
     backupScanState = { message:'', ok:true };
     let statusText = jobDisplayMessage || job.message || `Chain ${jobType || 'operation'} in progress…`;
     if (jobActive && jobType === 'restore' && !jobActiveOnThisNode){
-      const label = jobContainerName || 'another node';
-      statusText = `Restore running on ${label}`;
+      statusText = `Restore running on ${jobNodeDisplay}`;
     }
     setChainControlStatus(statusText, job.status !== 'error');
     nodeControlState.renderedChainJobDigest = jobDigest || statusText || '';
@@ -1491,33 +1545,45 @@ async function refreshChainBackups(force = false){
     const rawStatus = (rawJob && rawJob.status ? String(rawJob.status).toLowerCase() : '');
     const rawRunning = !!(rawJob && (rawJob.active || rawStatus === 'running' || rawStatus === 'cancelling'));
     const rawHasContainer = !!(rawJob && rawJob.details && typeof rawJob.details === 'object' && (rawJob.details.container || rawJob.details.target_container));
+    let locatedJob = null;
+    if (!rawRunning && !rawHasContainer){
+      locatedJob = await locateActiveChainJob(currentNodeId);
+    }
     let nextShared = sharedJob;
     if (rawRunning || rawHasContainer){
       nextShared = rawJob;
+    } else if (locatedJob && locatedJob.job){
+      nextShared = locatedJob.job;
     } else if (!sharedJob || !(sharedJob.active || sharedJob.status === 'running')){
       nextShared = rawJob;
     }
     nodeControlState.sharedChainJob = nextShared || null;
     if (rawRunning){
       nodeControlState.chainJob = rawJob;
-    } else if (nextShared && (nextShared.active || nextShared.status === 'running')){
+    } else if (nextShared && (nextShared.active || nextShared.status === 'running' || nextShared.status === 'cancelling')){
       nodeControlState.chainJob = nextShared;
     } else {
       nodeControlState.chainJob = rawJob || null;
     }
-    if (rawRunning){
-      const jobDetails = (nodeControlState.chainJob && nodeControlState.chainJob.details) || {};
-      const jobContainer = (jobDetails.container || jobDetails.target_container || '').trim();
-      if (jobContainer){
+    const jobDetails = (nodeControlState.chainJob && nodeControlState.chainJob.details) || {};
+    const jobNodeId = (jobDetails.node || jobDetails.node_id || jobDetails.nodeId || '').toString().trim();
+    const jobContainer = (jobDetails.container || jobDetails.target_container || '').trim();
+    if ((rawRunning || (nodeControlState.chainJob && nodeControlState.chainJob.active))){
+      if (jobNodeId && jobNodeId !== currentNodeId){
+        autoSelectChainJobNode(jobNodeId);
+      } else if (jobContainer){
         const activeMeta = getActiveNodeMeta();
         const currentContainer = activeMeta && activeMeta.container ? activeMeta.container.trim() : '';
         if (jobContainer !== currentContainer){
           const targetNode = (knownNodes || []).find(node => node && node.container === jobContainer);
           if (targetNode && targetNode.id && targetNode.id !== currentNodeId){
-            setActiveNode(targetNode.id, { skipRefresh:true });
-            nodeControlState.activeNode = targetNode.id;
+            autoSelectChainJobNode(targetNode.id);
           }
         }
+      }
+    } else if (locatedJob && locatedJob.job){
+      if (locatedJob.node && locatedJob.node !== currentNodeId){
+        autoSelectChainJobNode(locatedJob.node);
       }
     }
     nodeControlState.chainBackupsLastFetched = Date.now();
