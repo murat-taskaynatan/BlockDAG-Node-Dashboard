@@ -3846,12 +3846,12 @@ def _chain_restore_task(container_name: str, backup_name: str):
                         last_read = read_bytes
                     elapsed = time.time() - started_ts
                     estimated_total = float(total_bytes or 0) * RESTORE_PROGRESS_EXPANSION_FACTOR
-                    if dir_size_bytes and estimated_total <= float(dir_size_bytes):
-                        estimated_total = float(dir_size_bytes) * RESTORE_PROGRESS_EXPANSION_FACTOR
-                    if estimated_total <= float(read_bytes or 0.0):
-                        estimated_total = float(max(read_bytes or 0.0, dir_size_bytes or 0.0)) * RESTORE_PROGRESS_EXPANSION_FACTOR
+                    if dir_size_bytes:
+                        estimated_total = max(estimated_total, float(dir_size_bytes) * RESTORE_PROGRESS_EXPANSION_FACTOR)
+                    if read_bytes:
+                        estimated_total = max(estimated_total, float(read_bytes) * RESTORE_PROGRESS_EXPANSION_FACTOR)
                     if estimated_total <= 0:
-                        estimated_total = float(max(read_bytes or 1.0, 1.0)) * RESTORE_PROGRESS_EXPANSION_FACTOR
+                        estimated_total = float(max(total_bytes or 0, dir_size_bytes or 0, read_bytes or 0, 1)) * RESTORE_PROGRESS_EXPANSION_FACTOR
                     progress_total = estimated_total
                     if dir_size_bytes:
                         progress_total = max(progress_total, float(dir_size_bytes) * RESTORE_PROGRESS_EXPANSION_FACTOR)
