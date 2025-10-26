@@ -3962,11 +3962,8 @@ def _chain_restore_task(container_name: str, backup_name: str):
                 daemon_error = str(exc)
         container_restarted = False
         if not cancelled and daemon_triggered and container_name:
-            try:
-                _wait_for_container_state(container_name, running=True, timeout=60.0)
-                container_restarted = True
-            except Exception as exc:
-                restart_error = str(exc)
+            # Allow systemd-managed restart to proceed asynchronously.
+            container_restarted = None
         elif not cancelled and container_name:
             try:
                 container_restarted = bool(_restart_container_for_job(container_name))
