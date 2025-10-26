@@ -1440,7 +1440,22 @@ function renderChainControls(){
     (!jobNodeId && (!jobContainerName || !activeNodeContainer || jobContainerName === activeNodeContainer))
   );
   const jobNodeMeta = jobNodeId ? (knownNodes || []).find(node => node && node.id === jobNodeId) : null;
-  const jobNodeLabel = jobNodeMeta ? (jobNodeMeta.label || jobNodeMeta.container || jobNodeMeta.id) : (jobDetails.node_label || jobContainerName || jobNodeId || 'another node');
+  const jobNodeLabelRaw = jobNodeMeta ? (jobNodeMeta.label || '') : (jobDetails.node_label || '');
+  const jobNodeContainerRaw = jobNodeMeta ? (jobNodeMeta.container || '') : jobContainerName;
+  const jobNodeLabel = (() => {
+    const label = (jobNodeLabelRaw || '').trim();
+    const container = (jobNodeContainerRaw || jobNodeId || '').trim();
+    if (label && container && !label.toLowerCase().includes(container.toLowerCase())){
+      return `${label} (${container})`;
+    }
+    if (!label && container){
+      return container;
+    }
+    if (label){
+      return container && !label.toLowerCase().includes(container.toLowerCase()) ? `${label} (${container})` : label;
+    }
+    return jobNodeId || container || 'another node';
+  })();
   const showProgressDetails = !jobActive || jobType !== 'restore' || jobActiveOnThisNode;
   const jobDisplayMessage = showProgressDetails ? jobMessage : '';
   if (jobActive){
@@ -1473,6 +1488,12 @@ function renderChainControls(){
     if (job && (jobDisplayMessage || job.message)){
       backupScanState = { message:'', ok:true };
       let statusText = jobDisplayMessage || job.message;
+      if (jobType === 'restore' && job.status === 'cancelling'){
+        const cancelLabel = jobNodeLabel || (jobContainerName || 'selected node');
+        statusText = `Stopping restore on ${cancelLabel}`;
+      } else if (jobType === 'restore' && !jobActiveOnThisNode){
+        statusText = `Restore running on ${jobNodeLabel}`;
+      }
       const digest = jobDigest || statusText || '';
       if (!digest || digest !== nodeControlState.renderedChainJobDigest){
         setChainControlStatus(statusText, job.status !== 'error');
