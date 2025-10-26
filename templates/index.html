@@ -457,6 +457,13 @@ function getActiveNodeMeta(){
   return knownNodes.find(n => n && n.id === currentNodeId) || null;
 }
 
+function nodeDisplaySortValue(node){
+  if (!node) return '\uffff';
+  const containerLabel = (node.container || '').trim();
+  const display = containerLabel || (node.label || node.id || '');
+  return display.toLowerCase();
+}
+
 function getActiveContainerEntry(){
   const node = getActiveNodeMeta();
   if (!node || !node.container) return null;
@@ -1209,7 +1216,18 @@ function renderNodeControls(errorMsg){
       nodeSelect.appendChild(opt);
       nodeSelect.disabled = true;
     } else {
-      knownNodes.forEach(node => {
+      const sortedNodes = Array.isArray(knownNodes) ? knownNodes.slice() : [];
+      sortedNodes.sort((a, b) => {
+        const aVal = nodeDisplaySortValue(a);
+        const bVal = nodeDisplaySortValue(b);
+        if (aVal === bVal){
+          const aId = (a && a.id) || '';
+          const bId = (b && b.id) || '';
+          return aId.localeCompare(bId);
+        }
+        return aVal.localeCompare(bVal);
+      });
+      sortedNodes.forEach(node => {
         if (!node || !node.id) return;
         const opt = document.createElement('option');
         opt.value = node.id;
