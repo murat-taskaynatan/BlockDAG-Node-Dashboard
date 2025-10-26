@@ -2708,6 +2708,6 @@ const pollMs = Number(window.POLL_INTERVAL || 2000) || 2000;
   setInterval(refreshLogs, logsInterval);
 })();
 </script>
-<div id="versionBadge">{{ app_version_display|default(app_version|default('n/a')) }}</div>
+<div id="versionBadge">{{ app_version_display|default(app_version|default('v1.4.1')) }}</div>
 <script>window.POLL_INTERVAL = {{ poll_interval_ms | safe }};</script>
 <script src="/config.js"></script>
