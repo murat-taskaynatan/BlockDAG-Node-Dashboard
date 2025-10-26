@@ -1,4 +1,4 @@
-import os, time, json, threading, shutil, subprocess, math, logging, re
+import os, time, json, threading, shutil, subprocess, math, logging, re, shlex
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -89,6 +89,8 @@ MINING_STATE_SYNC_CACHE_SEC = float(os.getenv("BDAG_MINING_STATE_SYNC_CACHE_SEC"
 DOCKER_BIN = shutil.which("docker") or ("/usr/bin/docker" if os.path.exists("/usr/bin/docker") else None)
 SYSTEMCTL_BIN = shutil.which("systemctl") or ("/usr/bin/systemctl" if os.path.exists("/usr/bin/systemctl") else None)
 RESTART_INSTALLER = os.path.join(os.path.dirname(__file__), "scripts", "install_container_restart.sh")
+AUTO_BACKUP_INSTALLER = os.path.join(os.path.dirname(__file__), "scripts", "install_chain_autobackup.sh")
+AUTO_BACKUP_RUNNER = os.path.join(os.path.dirname(__file__), "scripts", "run_chain_autobackup.py")
 SYSTEMD_UNIT_DIR = "/etc/systemd/system"
 SYSTEMCTL_BIN = shutil.which("systemctl") or ("/usr/bin/systemctl" if os.path.exists("/usr/bin/systemctl") else None)
 SAMPLE_SEC = int(os.getenv("BDAG_SAMPLE_SEC", "5"))
@@ -1404,6 +1406,21 @@ def _restart_unit_info(container):
     }
 
 
+def _backup_unit_info(container):
+    base = f"{_sanitize_unit_name(container)}-chain-backup"
+    service = f"{base}.service"
+    timer = f"{base}.timer"
+    service_path = os.path.join(SYSTEMD_UNIT_DIR, service)
+    timer_path = os.path.join(SYSTEMD_UNIT_DIR, timer)
+    return {
+        "base": base,
+        "service": service,
+        "timer": timer,
+        "service_path": service_path,
+        "timer_path": timer_path,
+    }
+
+
 def _schedule_daemon_restart(container: str) -> bool:
     if not container or not SYSTEMCTL_BIN:
         return False
@@ -1538,6 +1555,60 @@ def _get_auto_restart_status(container):
     }
 
 
+def _parse_backup_service_limit(service_path):
+    if not os.path.exists(service_path):
+        return None
+    try:
+        with open(service_path, "r", encoding="utf-8") as fh:
+            for line in fh:
+                if not line.startswith("ExecStart="):
+                    continue
+                _, command = line.split("=", 1)
+                try:
+                    parts = shlex.split(command.strip())
+                except Exception:
+                    continue
+                for idx, part in enumerate(parts):
+                    normalized = part.lower()
+                    if normalized in ("--max", "--max-backups", "--backup-limit"):
+                        if idx + 1 < len(parts):
+                            try:
+                                value = int(parts[idx + 1])
+                                if value > 0:
+                                    return value
+                            except Exception:
+                                continue
+                break
+    except Exception:
+        return None
+    return None
+
+
+def _get_auto_backup_status(container):
+    info = _backup_unit_info(container)
+    installed = os.path.exists(info["timer_path"]) or os.path.exists(info["service_path"])
+    interval_raw = _read_timer_interval(info["timer_path"])
+    interval_hours = _interval_str_to_hours(interval_raw)
+    enabled = False
+    active = False
+    max_backups = _parse_backup_service_limit(info["service_path"])
+    if SYSTEMCTL_BIN and installed:
+        res = _systemctl_cmd(["is-enabled", info["timer"]])
+        enabled = bool(res and res.returncode == 0)
+        res = _systemctl_cmd(["is-active", info["timer"]])
+        active = bool(res and res.returncode == 0)
+    return {
+        "installed": bool(installed),
+        "enabled": bool(enabled),
+        "active": bool(active),
+        "interval": interval_raw,
+        "interval_hours": interval_hours,
+        "max_backups": max_backups,
+        "service": info["service"],
+        "timer": info["timer"],
+    }
+
+
 def _format_hours_interval(hours):
     value = max(float(hours), 1.0)
     if abs(value - round(value)) < 1e-6:
@@ -1564,6 +1635,59 @@ def _enable_auto_restart(container, hours):
 
 def _disable_auto_restart(container):
     info = _restart_unit_info(container)
+    if SYSTEMCTL_BIN:
+        _systemctl_cmd(["disable", "--now", info["timer"]])
+        _systemctl_cmd(["disable", info["service"]])
+    for path in (info["timer_path"], info["service_path"]):
+        try:
+            if os.path.exists(path):
+                os.remove(path)
+        except Exception:
+            pass
+    if SYSTEMCTL_BIN:
+        _systemctl_cmd(["daemon-reload"])
+
+
+def _set_chain_backup_limit(limit: int) -> int:
+    global CHAIN_BACKUP_MAX
+    try:
+        value = int(limit)
+    except Exception:
+        value = 0
+    if value < 0:
+        value = 0
+    CHAIN_BACKUP_MAX = value
+    DEFAULT_NODE_SETTINGS["chain_backup_max"] = value
+    if DEFAULT_NODE.chain_backup_max != value:
+        DEFAULT_NODE.chain_backup_max = value
+    for ctx in NODES.values():
+        ctx.chain_backup_max = value
+    return value
+
+
+def _enable_auto_backup(container, hours, max_backups):
+    if not os.path.exists(AUTO_BACKUP_INSTALLER):
+        raise RuntimeError("install_chain_autobackup.sh not found")
+    if not os.access(AUTO_BACKUP_INSTALLER, os.X_OK):
+        raise RuntimeError("install_chain_autobackup.sh is not executable")
+    interval = _format_hours_interval(hours)
+    try:
+        limit = int(max_backups)
+    except Exception:
+        limit = 0
+    if limit <= 0:
+        raise RuntimeError("max backups must be positive")
+    _set_chain_backup_limit(limit)
+    cmd = [AUTO_BACKUP_INSTALLER, container, interval, str(limit)]
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        message = result.stderr.strip() or result.stdout.strip() or "failed to configure auto backup"
+        raise RuntimeError(message)
+    return result.stdout.strip()
+
+
+def _disable_auto_backup(container):
+    info = _backup_unit_info(container)
     if SYSTEMCTL_BIN:
         _systemctl_cmd(["disable", "--now", info["timer"]])
         _systemctl_cmd(["disable", info["service"]])
@@ -3128,6 +3252,10 @@ def docker_list():
                 entry["auto_restart"] = _get_auto_restart_status(name)
             except Exception:
                 entry["auto_restart"] = {"installed": False, "enabled": False, "active": False, "interval": None, "interval_hours": None}
+            try:
+                entry["auto_backup"] = _get_auto_backup_status(name)
+            except Exception:
+                entry["auto_backup"] = {"installed": False, "enabled": False, "active": False, "interval": None, "interval_hours": None, "max_backups": None}
             items.append(entry)
         return items
     except Exception:
@@ -4299,6 +4427,62 @@ def api_control():
         except Exception as exc:
             return jsonify({"ok": False, "error": str(exc), "node": ctx.id}), 400
         return jsonify({"ok": True, "message": "Auto restart disabled", "node": ctx.id})
+
+    if action == "auto_backup_enable":
+        container_name = name or ctx.container
+        if not container_name:
+            return jsonify({"ok": False, "error": "missing container name"}), 400
+        if not SYSTEMCTL_BIN:
+            return jsonify({"ok": False, "error": "systemctl not available on host"}), 400
+        try:
+            hours = float(body.get("hours") or body.get("backup_hours") or body.get("interval") or 0)
+        except Exception:
+            return jsonify({"ok": False, "error": "invalid hours value"}), 400
+        try:
+            max_backups = int(body.get("max") or body.get("max_backups") or body.get("backup_limit") or body.get("limit") or 0)
+        except Exception:
+            return jsonify({"ok": False, "error": "invalid max backups value"}), 400
+        if hours <= 0:
+            return jsonify({"ok": False, "error": "auto backup hours must be positive"}), 400
+        if max_backups <= 0:
+            return jsonify({"ok": False, "error": "max backups must be positive"}), 400
+        try:
+            with use_node_context(ctx):
+                _set_chain_backup_limit(max_backups)
+                output = _enable_auto_backup(container_name, hours, max_backups)
+        except Exception as exc:
+            return jsonify({"ok": False, "error": str(exc), "node": ctx.id}), 400
+        interval_text = _format_hours_interval(hours)
+        message = output or f"Auto backup configured every {interval_text} (keep {max_backups})"
+        return jsonify({"ok": True, "message": message, "node": ctx.id})
+
+    if action == "auto_backup_disable":
+        container_name = name or ctx.container
+        if not container_name:
+            return jsonify({"ok": False, "error": "missing container name"}), 400
+        if not SYSTEMCTL_BIN:
+            return jsonify({"ok": False, "error": "systemctl not available on host"}), 400
+        try:
+            with use_node_context(ctx):
+                _disable_auto_backup(container_name)
+        except Exception as exc:
+            return jsonify({"ok": False, "error": str(exc), "node": ctx.id}), 400
+        return jsonify({"ok": True, "message": "Auto backup disabled", "node": ctx.id})
+
+    if action == "auto_backup_run":
+        container_name = name or ctx.container
+        if not container_name:
+            return jsonify({"ok": False, "error": "missing container name"}), 400
+        try:
+            limit = int(body.get("max") or body.get("max_backups") or body.get("backup_limit") or body.get("limit") or 0)
+        except Exception:
+            limit = 0
+        with use_node_context(ctx):
+            if limit > 0:
+                _set_chain_backup_limit(limit)
+            ok, msg = trigger_chain_backup(container_name, ctx)
+        status = 200 if ok else 400
+        return jsonify({"ok": ok, "message": msg, "node": ctx.id}), status
 
     if action == "chain_backup":
         ok, msg = trigger_chain_backup(name, ctx)

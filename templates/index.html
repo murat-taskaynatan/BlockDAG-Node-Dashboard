@@ -42,7 +42,7 @@
   width:110px !important;
   flex:0 0 110px !important;
 }
-.node-ctrls__actions--auto{margin-left:20px;display:flex;flex-direction:column;align-items:flex-start;gap:4px}
+.node-ctrls__actions--auto{margin-left:20px;display:flex;flex-wrap:wrap;align-items:flex-start;gap:16px}
 .node-ctrls__actions--auto .btn{
   min-width:140px;
   width:140px !important;
@@ -50,14 +50,16 @@
 }
 .node-ctrls__actions--auto .node-ctrls__label{margin:0;white-space:nowrap}
 .auto-hours{display:inline-flex;align-items:center;gap:6px}
+.auto-max{display:inline-flex;align-items:center;gap:6px}
 .auto-toggle{display:flex;align-items:center;gap:12px}
 .auto-toggle .toggle{position:relative;display:inline-flex;width:48px;height:26px;border-radius:999px;background:rgba(255,255,255,.2);cursor:pointer;transition:background .2s ease}
 .auto-toggle .toggle input{opacity:0;width:0;height:0}
 .auto-toggle .toggle-slider{position:absolute;top:4px;left:4px;width:18px;height:18px;border-radius:50%;background:#fff;transition:transform .2s ease,background .2s ease}
 .auto-toggle .toggle input:checked + .toggle-slider{transform:translateX(22px);background:#25d366}
-.auto-hours{display:flex;align-items:center;gap:6px}
-.auto-hours input{width:56px;text-align:center;padding:.35rem .4rem;flex:0 0 auto;background:transparent;border:1px solid #3a4a7a;border-radius:.6rem;color:inherit}
+.auto-hours input,.auto-max input{width:56px;text-align:center;padding:.35rem .4rem;flex:0 0 auto;background:transparent;border:1px solid #3a4a7a;border-radius:.6rem;color:inherit}
 .auto-hours__suffix{font-size:11px;opacity:.75;text-transform:uppercase;letter-spacing:.06em;margin-right:4px}
+.auto-max__suffix{font-size:11px;opacity:.75;text-transform:uppercase;letter-spacing:.06em;margin-right:4px}
+.auto-block{display:flex;flex-direction:column;gap:6px}
 .node-ctrls label span{opacity:.7;font-size:11px;text-transform:uppercase;letter-spacing:.06em}
 .node-ctrls input{background:transparent;border:1px solid #3a4a7a;border-radius:.6rem;padding:.35rem .6rem;color:inherit}
 .node-ctrls select{width:100%;appearance:none;background-color:rgba(255,255,255,.06);border:1px solid #3a4a7a;border-radius:.6rem;padding:.35rem .6rem;color:var(--text);background-image:linear-gradient(45deg,transparent 50%,currentColor 50%),linear-gradient(135deg,currentColor 50%,transparent 50%);background-position:calc(100% - 18px) calc(50% - 3px),calc(100% - 12px) calc(50% - 3px);background-size:6px 6px;background-repeat:no-repeat;padding-right:1.8rem}
@@ -183,19 +185,38 @@
             </button>
             <button class="btn" data-node-action="restart" id="btnContainerRestart" disabled>Restart</button>
           </div>
-        <div class="node-ctrls__actions node-ctrls__actions--auto">
-          <span class="node-ctrls__label">Auto restart</span>
-          <div class="auto-toggle">
-            <label class="toggle">
-              <input type="checkbox" id="autoRestartToggle" disabled>
-              <span class="toggle-slider"></span>
-            </label>
-            <div class="auto-hours">
-              <input type="number" id="autoRestartHours" min="1" step="1" value="6">
-              <span class="auto-hours__suffix">hrs</span>
+          <div class="node-ctrls__actions node-ctrls__actions--auto">
+            <div class="auto-block auto-block--restart">
+              <span class="node-ctrls__label">Auto restart</span>
+              <div class="auto-toggle">
+                <label class="toggle">
+                  <input type="checkbox" id="autoRestartToggle" disabled>
+                  <span class="toggle-slider"></span>
+                </label>
+                <div class="auto-hours">
+                  <input type="number" id="autoRestartHours" min="1" step="1" value="6">
+                  <span class="auto-hours__suffix">hrs</span>
+                </div>
+              </div>
+            </div>
+            <div class="auto-block auto-block--backup">
+              <span class="node-ctrls__label">Auto backup</span>
+              <div class="auto-toggle auto-toggle--backup">
+                <label class="toggle">
+                  <input type="checkbox" id="autoBackupToggle" disabled>
+                  <span class="toggle-slider"></span>
+                </label>
+                <div class="auto-hours">
+                  <input type="number" id="autoBackupHours" min="1" step="1" value="24">
+                  <span class="auto-hours__suffix">hrs</span>
+                </div>
+                <div class="auto-max">
+                  <input type="number" id="autoBackupMax" min="1" step="1" value="10">
+                  <span class="auto-max__suffix">max</span>
+                </div>
+              </div>
             </div>
           </div>
-        </div>
         </div>
         <span class="node-ctrls__meta node-ctrls__meta--status" id="nodeControlStatus">&nbsp;</span>
         <span class="node-ctrls__meta" id="nodeContainerDetails"></span>
@@ -397,6 +418,8 @@ let currentNodeId = (localStorage.getItem('dashboard.nodeId') || '').trim();
 let nodeControlPendingMessage = null;
 let chainControlPendingMessage = null;
 const AUTO_RESTART_DEFAULT_HOURS = 6;
+const AUTO_BACKUP_DEFAULT_HOURS = 24;
+const AUTO_BACKUP_DEFAULT_LIMIT = 10;
 const autoRestartUI = (() => {
   let bound = false;
   const api = {
@@ -448,6 +471,69 @@ const autoRestartUI = (() => {
       });
       bound = true;
       this.update({ enabled: false, disabled: true, tooltip: 'Auto restart unavailable' });
+    }
+  };
+  return api;
+})();
+
+const autoBackupUI = (() => {
+  let bound = false;
+  const api = {
+    get toggle(){ return document.getElementById('autoBackupToggle'); },
+    get hoursInput(){ return document.getElementById('autoBackupHours'); },
+    get maxInput(){ return document.getElementById('autoBackupMax'); },
+    update({ enabled, hours, max, disabled, tooltip } = {}){
+      const checkbox = this.toggle;
+      const hoursInput = this.hoursInput;
+      const maxInput = this.maxInput;
+      if (!checkbox || !hoursInput || !maxInput) return;
+      if (enabled !== undefined){
+        checkbox.checked = !!enabled;
+      }
+      if (hours !== undefined && Number.isFinite(hours) && hours > 0){
+        hoursInput.value = Math.max(1, Math.round(hours));
+      }
+      if (max !== undefined && Number.isFinite(max) && max > 0){
+        maxInput.value = Math.max(1, Math.round(max));
+      }
+      if (tooltip !== undefined && checkbox.parentElement){
+        checkbox.parentElement.setAttribute('title', tooltip || '');
+      }
+      if (disabled !== undefined){
+        checkbox.disabled = !!disabled;
+      }
+      const toggleDisabled = checkbox.disabled || !checkbox.checked;
+      hoursInput.disabled = toggleDisabled;
+      maxInput.disabled = toggleDisabled;
+    },
+    setState(enabled, hours, max){
+      this.update({ enabled, hours, max });
+    },
+    setDisabled(disabled, tooltip){
+      this.update({ disabled, tooltip });
+    },
+    setPending(pending){
+      const checkbox = this.toggle;
+      if (!checkbox) return;
+      if (pending){
+        checkbox.dataset.pending = '1';
+        this.update({ disabled: true, tooltip: 'Please wait…' });
+      } else {
+        checkbox.dataset.pending = '';
+      }
+    },
+    bind(){
+      if (bound) return;
+      const checkbox = this.toggle;
+      if (!checkbox) return;
+      checkbox.addEventListener('change', () => {
+        if (checkbox.disabled) return;
+        const previousState = !checkbox.checked;
+        this.update({ enabled: checkbox.checked });
+        performNodeAction(checkbox.checked ? 'auto_backup_enable' : 'auto_backup_disable', { previousAutoBackupEnabled: previousState });
+      });
+      bound = true;
+      this.update({ enabled: false, disabled: true, tooltip: 'Auto backup unavailable' });
     }
   };
   return api;
@@ -1047,6 +1133,12 @@ function setNodeControlButtonsDisabled(disabled){
     } else {
       autoRestartUI.setDisabled(true, 'Operation in progress');
     }
+    const backupToggle = autoBackupUI.toggle;
+    if (backupToggle && backupToggle.dataset.pending === '1'){
+      autoBackupUI.update({ disabled: true });
+    } else {
+      autoBackupUI.setDisabled(true, 'Operation in progress');
+    }
   }
 }
 
@@ -1156,10 +1248,40 @@ function findContainer(name){
   return (nodeControlState.containers || []).find(item => item && item.name === name) || null;
 }
 
+function describeAutoRestart(entry){
+  const info = entry && entry.auto_restart;
+  if (!info || !info.installed){
+    return 'Auto restart: Disabled';
+  }
+  const hours = Number.isFinite(info.interval_hours) ? Math.max(1, Math.round(info.interval_hours)) : null;
+  const base = hours ? `${hours}h` : (info.interval || 'unknown');
+  if (info.enabled){
+    return `Auto restart: every ${base}${info.active ? ' (active)' : ''}`;
+  }
+  return `Auto restart: every ${base} (disabled)`;
+}
+
+function describeAutoBackup(entry){
+  const info = entry && entry.auto_backup;
+  if (!info || !info.installed){
+    return 'Auto backup: Disabled';
+  }
+  const hours = Number.isFinite(info.interval_hours) ? Math.max(1, Math.round(info.interval_hours)) : null;
+  const base = hours ? `${hours}h` : (info.interval || 'unknown');
+  const limit = Number.isFinite(info.max_backups) && info.max_backups > 0 ? Math.round(info.max_backups) : null;
+  const limitText = limit ? ` · keep ${limit}` : '';
+  if (info.enabled){
+    return `Auto backup: every ${base}${limitText}${info.active ? ' (active)' : ''}`;
+  }
+  return `Auto backup: every ${base}${limitText} (disabled)`;
+}
+
 function updateNodeContainerDetails(){
   const details = document.getElementById('nodeContainerDetails');
   const toggleBtn = document.getElementById('btnContainerToggle');
   const hoursInput = autoRestartUI.hoursInput;
+  const backupHoursInput = autoBackupUI.hoursInput;
+  const backupMaxInput = autoBackupUI.maxInput;
   if (!details) return;
   details.textContent = '';
   const hostMode = !!nodeControlState.hostMode;
@@ -1170,9 +1292,19 @@ function updateNodeContainerDetails(){
   const autoInfo = containerEntry && containerEntry.auto_restart;
   const autoEnabled = !!(autoInfo && autoInfo.installed && (autoInfo.enabled || autoInfo.active));
   const autoHours = Number.isFinite(autoInfo?.interval_hours) ? Math.max(1, Math.round(autoInfo.interval_hours)) : AUTO_RESTART_DEFAULT_HOURS;
+  const autoBackupInfo = containerEntry && containerEntry.auto_backup;
+  const autoBackupEnabled = !!(autoBackupInfo && autoBackupInfo.installed && (autoBackupInfo.enabled || autoBackupInfo.active));
+  const autoBackupHours = Number.isFinite(autoBackupInfo?.interval_hours) ? Math.max(1, Math.round(autoBackupInfo.interval_hours)) : AUTO_BACKUP_DEFAULT_HOURS;
+  const autoBackupLimit = Number.isFinite(autoBackupInfo?.max_backups) ? Math.max(1, Math.round(autoBackupInfo.max_backups)) : AUTO_BACKUP_DEFAULT_LIMIT;
 
   if (hoursInput && !autoRestartUI.toggle){
     hoursInput.disabled = true;
+  }
+  if (backupHoursInput && !autoBackupUI.toggle){
+    backupHoursInput.disabled = true;
+  }
+  if (backupMaxInput && !autoBackupUI.toggle){
+    backupMaxInput.disabled = true;
   }
 
   const tooltipBase = (() => {
@@ -1187,6 +1319,14 @@ function updateNodeContainerDetails(){
     hours: autoHours,
     disabled: !canControl,
     tooltip: tooltipBase || 'Toggle automatic container restart'
+  });
+
+  autoBackupUI.update({
+    enabled: autoBackupEnabled,
+    hours: autoBackupHours,
+    max: autoBackupLimit,
+    disabled: !canControl,
+    tooltip: tooltipBase || 'Toggle automatic chain backup'
   });
 
   if (toggleBtn){
@@ -1209,6 +1349,19 @@ function updateNodeContainerDetails(){
       : containerEntry ? (isRunning ? 'Stop container' : 'Start container')
       : 'Container status unavailable';
   }
+
+  const detailParts = [];
+  if (containerEntry){
+    const status = containerEntry.status || '';
+    if (status) detailParts.push(status);
+    detailParts.push(describeAutoRestart(containerEntry));
+    detailParts.push(describeAutoBackup(containerEntry));
+  } else if (containerName){
+    detailParts.push(`${containerName} (status unavailable)`);
+  } else {
+    detailParts.push('No container linked');
+  }
+  details.textContent = detailParts.filter(Boolean).join(' • ');
 }
 
 function renderNodeControls(errorMsg){
@@ -1219,6 +1372,7 @@ function renderNodeControls(errorMsg){
   if (!card) return;
   card.hidden = false;
   autoRestartUI.setDisabled(true, 'Auto restart unavailable');
+  autoBackupUI.setDisabled(true, 'Auto backup unavailable');
   if (nodeSelect){
     nodeSelect.innerHTML = '';
     if (!knownNodes.length){
@@ -1267,6 +1421,7 @@ function renderNodeControls(errorMsg){
   if (errorMsg){
     setNodeControlButtonsDisabled(true);
     autoRestartUI.setDisabled(true, errorMsg || 'Auto restart unavailable');
+    autoBackupUI.setDisabled(true, errorMsg || 'Auto backup unavailable');
     if (!nodeControlPendingMessage){
       setNodeControlStatus(errorMsg, false);
     }
@@ -1277,6 +1432,7 @@ function renderNodeControls(errorMsg){
   if (!nodeControlState.enabled && !hostMode){
     setNodeControlButtonsDisabled(true);
     autoRestartUI.setDisabled(true, 'Docker controls unavailable');
+    autoBackupUI.setDisabled(true, 'Docker controls unavailable');
     nodeControlState.chainEnabled = false;
     renderChainControls();
     if (!nodeControlPendingMessage){
@@ -1287,6 +1443,7 @@ function renderNodeControls(errorMsg){
   if (hostMode){
     setNodeControlButtonsDisabled(true);
     autoRestartUI.setDisabled(true, 'Docker controls unavailable on this host');
+    autoBackupUI.setDisabled(true, 'Docker controls unavailable on this host');
     nodeControlState.chainEnabled = serverAllowsChain;
     renderChainControls();
     if (!nodeControlPendingMessage){
@@ -1693,6 +1850,9 @@ async function performNodeAction(action, options = {}){
   const previousAutoEnabled = Object.prototype.hasOwnProperty.call(options, 'previousAutoEnabled')
     ? !!options.previousAutoEnabled
     : null;
+  const previousAutoBackupEnabled = Object.prototype.hasOwnProperty.call(options, 'previousAutoBackupEnabled')
+    ? !!options.previousAutoBackupEnabled
+    : null;
   if (action === 'chain_scan'){
     await scanChainBackups();
     return;
@@ -1704,23 +1864,33 @@ async function performNodeAction(action, options = {}){
     stop:'docker_stop',
     auto_enable:'auto_restart_enable',
     auto_disable:'auto_restart_disable',
+    auto_backup_enable:'auto_backup_enable',
+    auto_backup_disable:'auto_backup_disable',
     chain_backup:'chain_backup',
     chain_restore:'chain_restore',
     chain_delete:'chain_delete',
     chain_cancel:'chain_cancel',
   };
   const isChainAction = action.startsWith('chain_');
-  const isAutoAction = action === 'auto_enable' || action === 'auto_disable';
-  const revertAutoToggle = () => {
-    if (!isAutoAction) return;
+  const isAutoRestartAction = action === 'auto_enable' || action === 'auto_disable';
+  const isAutoBackupAction = action === 'auto_backup_enable' || action === 'auto_backup_disable';
+  const revertAutoRestartToggle = () => {
+    if (!isAutoRestartAction) return;
     if (previousAutoEnabled === null) return;
     autoRestartUI.update({ enabled: previousAutoEnabled });
     autoRestartUI.setPending(false);
   };
+  const revertAutoBackupToggle = () => {
+    if (!isAutoBackupAction) return;
+    if (previousAutoBackupEnabled === null) return;
+    autoBackupUI.update({ enabled: previousAutoBackupEnabled });
+    autoBackupUI.setPending(false);
+  };
   const hostMode = !!nodeControlState.hostMode;
   const statusSetter = isChainAction ? setChainControlStatus : setNodeControlStatus;
   if (!(action in ACTION_MAP)){
-    revertAutoToggle();
+    revertAutoRestartToggle();
+    revertAutoBackupToggle();
     statusSetter('Unsupported action', false);
     return;
   }
@@ -1741,12 +1911,14 @@ async function performNodeAction(action, options = {}){
     }
   }
   if (!container && !hostMode){
-    revertAutoToggle();
+    revertAutoRestartToggle();
+    revertAutoBackupToggle();
     statusSetter('Select a node with a container first', false);
     return;
   }
   if (!containerEntry && !hostMode && container && action !== 'chain_cancel'){
-    revertAutoToggle();
+    revertAutoRestartToggle();
+    revertAutoBackupToggle();
     statusSetter(`Container ${container} not available`, false);
     return;
   }
@@ -1776,7 +1948,8 @@ async function performNodeAction(action, options = {}){
   };
   const resolvedBackendAction = ACTION_MAP[action];
   if (!resolvedBackendAction){
-    revertAutoToggle();
+    revertAutoRestartToggle();
+    revertAutoBackupToggle();
     statusSetter('Unsupported action', false);
     return;
   }
@@ -1788,7 +1961,7 @@ async function performNodeAction(action, options = {}){
   if (action === 'auto_enable'){
     const hoursVal = Number(hoursInput ? hoursInput.value : AUTO_RESTART_DEFAULT_HOURS);
     if (!Number.isFinite(hoursVal) || hoursVal <= 0){
-      revertAutoToggle();
+      revertAutoRestartToggle();
       setNodeControlStatus('Enter auto restart hours ≥ 1', false);
       return;
     }
@@ -1798,6 +1971,26 @@ async function performNodeAction(action, options = {}){
   } else if (action === 'auto_disable'){
     successLabel = 'Auto restart disabled';
     statusMessage = `Disabling auto restart for ${container}`;
+  } else if (action === 'auto_backup_enable'){
+    const hoursVal = Number(autoBackupUI.hoursInput ? autoBackupUI.hoursInput.value : AUTO_BACKUP_DEFAULT_HOURS);
+    const maxVal = Number(autoBackupUI.maxInput ? autoBackupUI.maxInput.value : AUTO_BACKUP_DEFAULT_LIMIT);
+    if (!Number.isFinite(hoursVal) || hoursVal <= 0){
+      revertAutoBackupToggle();
+      setNodeControlStatus('Enter auto backup hours ≥ 1', false);
+      return;
+    }
+    if (!Number.isFinite(maxVal) || maxVal <= 0){
+      revertAutoBackupToggle();
+      setNodeControlStatus('Enter max backups ≥ 1', false);
+      return;
+    }
+    payload.backup_hours = hoursVal;
+    payload.backup_limit = maxVal;
+    successLabel = `Auto backup (${hoursVal}h · max ${maxVal})`;
+    statusMessage = `Configuring auto backup (${hoursVal}h, keep ${maxVal}) for ${container}`;
+  } else if (action === 'auto_backup_disable'){
+    successLabel = 'Auto backup disabled';
+    statusMessage = `Disabling auto backup for ${container}`;
   } else if (action === 'chain_backup'){
     successLabel = 'Chain backup';
     statusMessage = container ? `Creating chain backup for ${container}` : 'Creating chain backup';
@@ -1830,8 +2023,11 @@ async function performNodeAction(action, options = {}){
       payload.node = rawJobNodeId;
     }
   }
-  if (isAutoAction){
+  if (isAutoRestartAction){
     autoRestartUI.setPending(true);
+  }
+  if (isAutoBackupAction){
+    autoBackupUI.setPending(true);
   }
   let finalMessage = '';
   let finalOk = true;
@@ -1876,8 +2072,11 @@ async function performNodeAction(action, options = {}){
     console.warn('[node-controls] refresh after action failed', refreshErr);
     renderNodeControls('Node controls unavailable');
   }finally{
-    if (isAutoAction){
+    if (isAutoRestartAction){
       autoRestartUI.setPending(false);
+    }
+    if (isAutoBackupAction){
+      autoBackupUI.setPending(false);
     }
   }
   if (isChainAction){
@@ -2696,6 +2895,7 @@ const pollMs = Number(window.POLL_INTERVAL || 2000) || 2000;
   _showDefaultBackupStatus();
   wireNodeControls();
   autoRestartUI.bind();
+  autoBackupUI.bind();
   wireControls();
   wireLogsPanel();
   await loadChartConfig();
