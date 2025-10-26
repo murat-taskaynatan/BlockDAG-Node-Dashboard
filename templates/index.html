@@ -50,7 +50,13 @@
 }
 .node-ctrls__actions--auto .node-ctrls__label{margin:0;white-space:nowrap}
 .auto-hours{display:inline-flex;align-items:center;gap:6px}
-.auto-hours input{width:56px;text-align:center;padding:.35rem .4rem;flex:0 0 auto}
+.auto-toggle{display:flex;align-items:center;gap:12px}
+.auto-toggle .toggle{position:relative;display:inline-flex;width:48px;height:26px;border-radius:999px;background:rgba(255,255,255,.2);cursor:pointer;transition:background .2s ease}
+.auto-toggle .toggle input{opacity:0;width:0;height:0}
+.auto-toggle .toggle-slider{position:absolute;top:4px;left:4px;width:18px;height:18px;border-radius:50%;background:#fff;transition:transform .2s ease,background .2s ease}
+.auto-toggle .toggle input:checked + .toggle-slider{transform:translateX(22px);background:#25d366}
+.auto-hours{display:flex;align-items:center;gap:6px}
+.auto-hours input{width:56px;text-align:center;padding:.35rem .4rem;flex:0 0 auto;background:transparent;border:1px solid #3a4a7a;border-radius:.6rem;color:inherit}
 .auto-hours__suffix{font-size:11px;opacity:.75;text-transform:uppercase;letter-spacing:.06em;margin-right:4px}
 .node-ctrls label span{opacity:.7;font-size:11px;text-transform:uppercase;letter-spacing:.06em}
 .node-ctrls input{background:transparent;border:1px solid #3a4a7a;border-radius:.6rem;padding:.35rem .6rem;color:inherit}
@@ -169,10 +175,15 @@
           </div>
         <div class="node-ctrls__actions node-ctrls__actions--auto">
           <span class="node-ctrls__label">Auto restart</span>
-          <div class="auto-hours">
-            <input type="number" id="autoRestartHours" min="1" step="1" value="6">
-            <span class="auto-hours__suffix">hrs</span>
-            <button class="btn node-ctrls__btn node-ctrls__btn--auto-toggle" data-node-action="auto_toggle" id="btnAutoRestartToggle" disabled>Enable</button>
+          <div class="auto-toggle">
+            <label class="toggle">
+              <input type="checkbox" id="autoRestartToggle" disabled>
+              <span class="toggle-slider"></span>
+            </label>
+            <div class="auto-hours">
+              <input type="number" id="autoRestartHours" min="1" step="1" value="6">
+              <span class="auto-hours__suffix">hrs</span>
+            </div>
           </div>
         </div>
         </div>
@@ -376,6 +387,61 @@ let currentNodeId = (localStorage.getItem('dashboard.nodeId') || '').trim();
 let nodeControlPendingMessage = null;
 let chainControlPendingMessage = null;
 const AUTO_RESTART_DEFAULT_HOURS = 6;
+const autoRestartUI = (() => {
+  let bound = false;
+  const api = {
+    get toggle(){ return document.getElementById('autoRestartToggle'); },
+    get hoursInput(){ return document.getElementById('autoRestartHours'); },
+    update({ enabled, hours, disabled, tooltip } = {}){
+      const checkbox = this.toggle;
+      const hoursInput = this.hoursInput;
+      if (!checkbox || !hoursInput) return;
+      if (enabled !== undefined){
+        checkbox.checked = !!enabled;
+      }
+      if (hours !== undefined && Number.isFinite(hours) && hours > 0){
+        hoursInput.value = Math.max(1, Math.round(hours));
+      }
+      if (tooltip !== undefined && checkbox.parentElement){
+        checkbox.parentElement.setAttribute('title', tooltip || '');
+      }
+      if (disabled !== undefined){
+        checkbox.disabled = !!disabled;
+      }
+      hoursInput.disabled = checkbox.disabled || !checkbox.checked;
+    },
+    setState(enabled, hours){
+      this.update({ enabled, hours });
+    },
+    setDisabled(disabled, tooltip){
+      this.update({ disabled, tooltip });
+    },
+    setPending(pending){
+      const checkbox = this.toggle;
+      if (!checkbox) return;
+      if (pending){
+        checkbox.dataset.pending = '1';
+        this.update({ disabled: true, tooltip: 'Please wait…' });
+      } else {
+        checkbox.dataset.pending = '';
+      }
+    },
+    bind(){
+      if (bound) return;
+      const checkbox = this.toggle;
+      if (!checkbox) return;
+      checkbox.addEventListener('change', () => {
+        if (checkbox.disabled) return;
+        const previousState = !checkbox.checked;
+        this.update({ enabled: checkbox.checked });
+        performNodeAction(checkbox.checked ? 'auto_enable' : 'auto_disable', { previousAutoEnabled: previousState });
+      });
+      bound = true;
+      this.update({ enabled: false, disabled: true, tooltip: 'Auto restart unavailable' });
+    }
+  };
+  return api;
+})();
 
 function getActiveNodeMeta(){
   return knownNodes.find(n => n && n.id === currentNodeId) || null;
@@ -950,19 +1016,20 @@ function setNodeControlStatus(msg, ok = true){
 }
 
 function setNodeControlButtonsDisabled(disabled){
-  const toggleBtn = document.getElementById('btnAutoRestartToggle');
   document.querySelectorAll('#nodeControlsCard [data-node-action]').forEach(btn => {
     const action = btn?.dataset?.nodeAction || '';
-    if (btn === toggleBtn || action === 'start' || action === 'stop') return;
     btn.disabled = !!disabled;
+    if (action !== 'chain_cancel' && btn.style){
+      btn.style.opacity = disabled ? '0.45' : '1';
+    }
   });
-  if (toggleBtn){
-    toggleBtn.disabled = !!disabled;
-    toggleBtn.style.opacity = disabled ? '0.45' : '1';
-  }
-  const hoursInput = document.getElementById('autoRestartHours');
-  if (hoursInput){
-    hoursInput.disabled = !!disabled;
+  if (disabled){
+    const toggle = autoRestartUI.toggle;
+    if (toggle && toggle.dataset.pending === '1'){
+      autoRestartUI.update({ disabled: true });
+    } else {
+      autoRestartUI.setDisabled(true, 'Operation in progress');
+    }
   }
 }
 
@@ -1060,153 +1127,56 @@ function findContainer(name){
   return (nodeControlState.containers || []).find(item => item && item.name === name) || null;
 }
 
-function describeAutoRestart(entry){
-  if (!entry || !entry.auto_restart) return 'Auto restart: Disabled';
-  const ar = entry.auto_restart;
-  if (!ar.installed){
-    return 'Auto restart: Disabled';
-  }
-  const base = ar.interval || (Number.isFinite(ar.interval_hours) ? `${Math.max(1, Math.round(ar.interval_hours))}h` : 'unknown');
-  if (ar.enabled){
-    if (ar.active){
-      return 'Auto restart: Active';
-    }
-    const state = 'enabled';
-    return `Auto restart: every ${base} (${state})`;
-  }
-  return `Auto restart: every ${base} (disabled)`;
-}
-
 function updateNodeContainerDetails(){
   const details = document.getElementById('nodeContainerDetails');
-  const hoursInput = document.getElementById('autoRestartHours');
-  const toggleBtn = document.getElementById('btnAutoRestartToggle');
   const startBtn = document.getElementById('btnContainerStart');
   const stopBtn = document.getElementById('btnContainerStop');
+  const hoursInput = autoRestartUI.hoursInput;
   if (!details) return;
   details.textContent = '';
-  if (toggleBtn){
-    toggleBtn.disabled = true;
-    toggleBtn.classList.remove('btn--danger');
-    toggleBtn.title = 'Select a node to manage auto restart';
-    toggleBtn.style.opacity = '0.45';
-    toggleBtn.dataset.state = 'enable';
-    toggleBtn.textContent = 'Enable';
-  }
-  if (startBtn){
-    startBtn.disabled = true;
-    startBtn.style.opacity = '0.45';
-    startBtn.title = 'Start container';
-  }
-  if (stopBtn){
-    stopBtn.disabled = true;
-    stopBtn.style.opacity = '0.45';
-    stopBtn.title = 'Stop container';
-    stopBtn.classList.add('btn--danger');
-  }
   const hostMode = !!nodeControlState.hostMode;
   const activeNode = getActiveNodeMeta();
   const containerEntry = getActiveContainerEntry();
   const containerName = activeNode && activeNode.container ? activeNode.container : '';
-  if (hostMode){
-    if (hoursInput){
-      hoursInput.value = AUTO_RESTART_DEFAULT_HOURS;
-    }
-    if (toggleBtn){
-      toggleBtn.disabled = true;
-      toggleBtn.title = 'Docker controls unavailable on this host';
-      toggleBtn.style.opacity = '0.45';
-    }
-    if (startBtn){
-      startBtn.disabled = true;
-      startBtn.title = 'Docker controls unavailable on this host';
-      startBtn.style.opacity = '0.45';
-    }
-    if (stopBtn){
-      stopBtn.disabled = true;
-      stopBtn.title = 'Docker controls unavailable on this host';
-      stopBtn.style.opacity = '0.45';
-    }
-    return;
+  const canControl = !hostMode && !!containerEntry;
+  const autoInfo = containerEntry && containerEntry.auto_restart;
+  const autoEnabled = !!(autoInfo && autoInfo.installed && (autoInfo.enabled || autoInfo.active));
+  const autoHours = Number.isFinite(autoInfo?.interval_hours) ? Math.max(1, Math.round(autoInfo.interval_hours)) : AUTO_RESTART_DEFAULT_HOURS;
+
+  if (hoursInput && !autoRestartUI.toggle){
+    hoursInput.disabled = true;
   }
-  if (!containerName){
-    if (hoursInput){
-      hoursInput.value = AUTO_RESTART_DEFAULT_HOURS;
-    }
-    if (toggleBtn){
-      toggleBtn.disabled = true;
-      toggleBtn.title = 'No container available';
-      toggleBtn.style.opacity = '0.45';
-    }
-    if (startBtn){
-      startBtn.disabled = true;
-      startBtn.title = 'No container available';
-      startBtn.style.opacity = '0.45';
-    }
-    if (stopBtn){
-      stopBtn.disabled = true;
-      stopBtn.title = 'No container available';
-      stopBtn.style.opacity = '0.45';
-    }
-    return;
-  }
-  if (!containerEntry){
-    if (hoursInput){
-      hoursInput.value = AUTO_RESTART_DEFAULT_HOURS;
-    }
-    if (toggleBtn){
-      toggleBtn.disabled = true;
-      toggleBtn.title = 'Container status unavailable';
-      toggleBtn.style.opacity = '0.45';
-    }
-    if (startBtn){
-      startBtn.disabled = true;
-      startBtn.title = 'Container status unavailable';
-      startBtn.style.opacity = '0.45';
-    }
-    if (stopBtn){
-      stopBtn.disabled = true;
-      stopBtn.title = 'Container status unavailable';
-      stopBtn.style.opacity = '0.45';
-    }
-    return;
-  }
-  if (hoursInput){
-    if (containerEntry.auto_restart && Number.isFinite(containerEntry.auto_restart.interval_hours)){
-      const hours = Math.max(1, Math.round(containerEntry.auto_restart.interval_hours));
-      hoursInput.value = hours;
-    } else {
-      hoursInput.value = AUTO_RESTART_DEFAULT_HOURS;
-    }
-  }
-  if (toggleBtn){
-    const auto = containerEntry.auto_restart || null;
-    const active = !!(auto && auto.installed && (auto.enabled || auto.active));
-    toggleBtn.disabled = false;
-    toggleBtn.style.opacity = '1';
-    if (active){
-      toggleBtn.classList.add('btn--danger');
-      toggleBtn.textContent = 'Disable';
-      toggleBtn.dataset.state = 'disable';
-      toggleBtn.title = 'Disable auto restart';
-    } else {
-      toggleBtn.classList.remove('btn--danger');
-      toggleBtn.textContent = 'Enable';
-      toggleBtn.dataset.state = 'enable';
-      toggleBtn.title = 'Enable auto restart';
-    }
-  }
-  const statusText = String(containerEntry.status || '').toLowerCase();
-  const isRunning = statusText.includes('up');
+
+  details.textContent = '';
+
+  const tooltipBase = (() => {
+    if (hostMode) return 'Docker controls unavailable on this host';
+    if (!containerName) return 'No container available';
+    if (!containerEntry) return 'Container status unavailable';
+    return '';
+  })();
+
+  autoRestartUI.update({
+    enabled: autoEnabled,
+    hours: autoHours,
+    disabled: !canControl,
+    tooltip: tooltipBase || 'Toggle automatic container restart'
+  });
+
   if (startBtn){
-    startBtn.disabled = isRunning;
-    startBtn.style.opacity = isRunning ? '0.45' : '1';
-    startBtn.title = isRunning ? 'Container already running' : 'Start container';
+    startBtn.disabled = hostMode || !containerEntry || String(containerEntry.status || '').toLowerCase().includes('up');
+    startBtn.style.opacity = startBtn.disabled ? '0.45' : '1';
+    startBtn.title = hostMode ? 'Docker controls unavailable on this host'
+      : containerEntry ? (startBtn.disabled ? 'Container already running' : 'Start container')
+      : 'Container status unavailable';
   }
   if (stopBtn){
-    stopBtn.disabled = !isRunning;
+    const isRunning = !!(containerEntry && String(containerEntry.status || '').toLowerCase().includes('up'));
+    stopBtn.disabled = hostMode || !containerEntry || !isRunning;
     stopBtn.style.opacity = stopBtn.disabled ? '0.45' : '1';
-    stopBtn.title = stopBtn.disabled ? 'Container already stopped' : 'Stop container';
+    stopBtn.title = hostMode ? 'Docker controls unavailable on this host'
+      : containerEntry ? (stopBtn.disabled ? 'Container already stopped' : 'Stop container')
+      : 'Container status unavailable';
   }
 }
 
@@ -1214,10 +1184,10 @@ function renderNodeControls(errorMsg){
   const card = document.getElementById('nodeControlsCard');
   const nodeSelect = document.getElementById('nodeSelect');
   const details = document.getElementById('nodeContainerDetails');
-  const toggleBtn = document.getElementById('btnAutoRestartToggle');
   const hostMode = !!nodeControlState.hostMode;
   if (!card) return;
   card.hidden = false;
+  autoRestartUI.setDisabled(true, 'Auto restart unavailable');
   if (nodeSelect){
     nodeSelect.innerHTML = '';
     if (!knownNodes.length){
@@ -1254,12 +1224,7 @@ function renderNodeControls(errorMsg){
   const serverAllowsChain = !!nodeControlState.chainEnabledServer || hostMode;
   if (errorMsg){
     setNodeControlButtonsDisabled(true);
-    if (toggleBtn){
-      toggleBtn.disabled = true;
-      toggleBtn.style.opacity = '0.45';
-      toggleBtn.textContent = 'Enable';
-      toggleBtn.dataset.state = 'enable';
-    }
+    autoRestartUI.setDisabled(true, errorMsg || 'Auto restart unavailable');
     if (!nodeControlPendingMessage){
       setNodeControlStatus(errorMsg, false);
     }
@@ -1269,12 +1234,7 @@ function renderNodeControls(errorMsg){
   }
   if (!nodeControlState.enabled && !hostMode){
     setNodeControlButtonsDisabled(true);
-    if (toggleBtn){
-      toggleBtn.disabled = true;
-      toggleBtn.style.opacity = '0.45';
-      toggleBtn.textContent = 'Enable';
-      toggleBtn.dataset.state = 'enable';
-    }
+    autoRestartUI.setDisabled(true, 'Docker controls unavailable');
     nodeControlState.chainEnabled = false;
     renderChainControls();
     if (!nodeControlPendingMessage){
@@ -1284,12 +1244,7 @@ function renderNodeControls(errorMsg){
   }
   if (hostMode){
     setNodeControlButtonsDisabled(true);
-    if (toggleBtn){
-      toggleBtn.disabled = true;
-      toggleBtn.style.opacity = '0.45';
-      toggleBtn.textContent = 'Enable';
-      toggleBtn.dataset.state = 'enable';
-    }
+    autoRestartUI.setDisabled(true, 'Docker controls unavailable on this host');
     nodeControlState.chainEnabled = serverAllowsChain;
     renderChainControls();
     if (!nodeControlPendingMessage){
@@ -1696,7 +1651,10 @@ async function scanChainBackups(){
   }
 }
 
-async function performNodeAction(action){
+async function performNodeAction(action, options = {}){
+  const previousAutoEnabled = Object.prototype.hasOwnProperty.call(options, 'previousAutoEnabled')
+    ? !!options.previousAutoEnabled
+    : null;
   if (action === 'chain_scan'){
     await scanChainBackups();
     return;
@@ -1708,17 +1666,23 @@ async function performNodeAction(action){
     stop:'docker_stop',
     auto_enable:'auto_restart_enable',
     auto_disable:'auto_restart_disable',
-    auto_toggle:null,
     chain_backup:'chain_backup',
     chain_restore:'chain_restore',
     chain_delete:'chain_delete',
     chain_cancel:'chain_cancel',
   };
   const isChainAction = action.startsWith('chain_');
+  const isAutoAction = action === 'auto_enable' || action === 'auto_disable';
+  const revertAutoToggle = () => {
+    if (!isAutoAction) return;
+    if (previousAutoEnabled === null) return;
+    autoRestartUI.update({ enabled: previousAutoEnabled });
+    autoRestartUI.setPending(false);
+  };
   const hostMode = !!nodeControlState.hostMode;
   const statusSetter = isChainAction ? setChainControlStatus : setNodeControlStatus;
-  const toggleBtn = document.getElementById('btnAutoRestartToggle');
   if (!(action in ACTION_MAP)){
+    revertAutoToggle();
     statusSetter('Unsupported action', false);
     return;
   }
@@ -1739,10 +1703,12 @@ async function performNodeAction(action){
     }
   }
   if (!container && !hostMode){
+    revertAutoToggle();
     statusSetter('Select a node with a container first', false);
     return;
   }
   if (!containerEntry && !hostMode && container && action !== 'chain_cancel'){
+    revertAutoToggle();
     statusSetter(`Container ${container} not available`, false);
     return;
   }
@@ -1763,19 +1729,16 @@ async function performNodeAction(action){
     }
     return;
   }
-  const hoursInput = document.getElementById('autoRestartHours');
+  const hoursInput = autoRestartUI.hoursInput;
   const backupSelect = document.getElementById('chainBackupSelect');
   const actionLabels = {
     restart: 'Restarting',
     start: 'Starting',
     stop: 'Stopping',
   };
-  if (action === 'auto_toggle'){
-    const desired = (toggleBtn && toggleBtn.dataset.state === 'disable') ? 'auto_disable' : 'auto_enable';
-    action = desired;
-  }
   const resolvedBackendAction = ACTION_MAP[action];
   if (!resolvedBackendAction){
+    revertAutoToggle();
     statusSetter('Unsupported action', false);
     return;
   }
@@ -1787,6 +1750,7 @@ async function performNodeAction(action){
   if (action === 'auto_enable'){
     const hoursVal = Number(hoursInput ? hoursInput.value : AUTO_RESTART_DEFAULT_HOURS);
     if (!Number.isFinite(hoursVal) || hoursVal <= 0){
+      revertAutoToggle();
       setNodeControlStatus('Enter auto restart hours ≥ 1', false);
       return;
     }
@@ -1828,6 +1792,9 @@ async function performNodeAction(action){
       payload.node = rawJobNodeId;
     }
   }
+  if (isAutoAction){
+    autoRestartUI.setPending(true);
+  }
   let finalMessage = '';
   let finalOk = true;
   try{
@@ -1863,25 +1830,29 @@ async function performNodeAction(action){
     } else {
       nodeControlPendingMessage = { text: finalMessage, ok: finalOk };
     }
-    nodeControlState.lastFetched = 0;
-    try{
-      await refreshNodeControls(true);
-    }catch(refreshErr){
-      console.warn('[node-controls] refresh after action failed', refreshErr);
-      renderNodeControls('Node controls unavailable');
+  }
+  nodeControlState.lastFetched = 0;
+  try{
+    await refreshNodeControls(true);
+  }catch(refreshErr){
+    console.warn('[node-controls] refresh after action failed', refreshErr);
+    renderNodeControls('Node controls unavailable');
+  }finally{
+    if (isAutoAction){
+      autoRestartUI.setPending(false);
     }
-    if (isChainAction){
-      if (chainControlPendingMessage){
-        setChainControlStatus(chainControlPendingMessage.text, chainControlPendingMessage.ok);
-        chainControlPendingMessage = null;
-      }
-      if (action === 'chain_restore'){
-        try{ await refreshChainBackups(true); }catch(_){/* ignore */}
-      }
-    } else if (nodeControlPendingMessage){
-      setNodeControlStatus(nodeControlPendingMessage.text, nodeControlPendingMessage.ok);
-      nodeControlPendingMessage = null;
+  }
+  if (isChainAction){
+    if (chainControlPendingMessage){
+      setChainControlStatus(chainControlPendingMessage.text, chainControlPendingMessage.ok);
+      chainControlPendingMessage = null;
     }
+    if (action === 'chain_restore'){
+      try{ await refreshChainBackups(true); }catch(_){/* ignore */}
+    }
+  } else if (nodeControlPendingMessage){
+    setNodeControlStatus(nodeControlPendingMessage.text, nodeControlPendingMessage.ok);
+    nodeControlPendingMessage = null;
   }
 }
 
@@ -2686,6 +2657,7 @@ const pollMs = Number(window.POLL_INTERVAL || 2000) || 2000;
 (async () => {
   _showDefaultBackupStatus();
   wireNodeControls();
+  autoRestartUI.bind();
   wireControls();
   wireLogsPanel();
   await loadChartConfig();
