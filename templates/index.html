@@ -474,6 +474,22 @@ function scheduleChainJobFollowup(shouldPoll){
   }, CHAIN_JOB_ACTIVE_REFRESH_MS);
 }
 
+function getCurrentChainJob(){
+  return nodeControlState.chainJob || nodeControlState.sharedChainJob || null;
+}
+
+function isChainJobPollingActive(){
+  const job = getCurrentChainJob();
+  if (!job) return false;
+  const status = (job.status || '').toString().toLowerCase();
+  if (job.active) return true;
+  if (status === 'running' || status === 'cancelling') return true;
+  if (job.details && job.details.cancel_requested){
+    return true;
+  }
+  return false;
+}
+
 function setActiveNode(nodeId, opts = {}){
   if (!nodeId) return;
   if (currentNodeId === nodeId) return;
@@ -1455,11 +1471,7 @@ async function refreshNodeControls(force = false){
 
 async function refreshChainBackups(force = false){
   const now = Date.now();
-  const activeJob = (() => {
-    const job = nodeControlState.chainJob || nodeControlState.sharedChainJob;
-    if (!job) return false;
-    return !!(job.active || job.status === 'running');
-  })();
+  const activeJob = isChainJobPollingActive();
   const refreshWindow = activeJob ? CHAIN_JOB_ACTIVE_REFRESH_MS : NODE_CTRL_REFRESH_MS;
   if (!force && now - (nodeControlState.chainBackupsLastFetched || 0) < refreshWindow){
     if (activeJob){
@@ -1476,7 +1488,8 @@ async function refreshChainBackups(force = false){
     nodeControlState.chainBackups = Array.isArray(data?.backups) ? data.backups : [];
     const rawJob = data?.job || null;
     const sharedJob = nodeControlState.sharedChainJob;
-    const rawRunning = !!(rawJob && (rawJob.active || rawJob.status === 'running'));
+    const rawStatus = (rawJob && rawJob.status ? String(rawJob.status).toLowerCase() : '');
+    const rawRunning = !!(rawJob && (rawJob.active || rawStatus === 'running' || rawStatus === 'cancelling'));
     const rawHasContainer = !!(rawJob && rawJob.details && typeof rawJob.details === 'object' && (rawJob.details.container || rawJob.details.target_container));
     let nextShared = sharedJob;
     if (rawRunning || rawHasContainer){
@@ -1492,9 +1505,24 @@ async function refreshChainBackups(force = false){
     } else {
       nodeControlState.chainJob = rawJob || null;
     }
+    if (rawRunning){
+      const jobDetails = (nodeControlState.chainJob && nodeControlState.chainJob.details) || {};
+      const jobContainer = (jobDetails.container || jobDetails.target_container || '').trim();
+      if (jobContainer){
+        const activeMeta = getActiveNodeMeta();
+        const currentContainer = activeMeta && activeMeta.container ? activeMeta.container.trim() : '';
+        if (jobContainer !== currentContainer){
+          const targetNode = (knownNodes || []).find(node => node && node.container === jobContainer);
+          if (targetNode && targetNode.id && targetNode.id !== currentNodeId){
+            setActiveNode(targetNode.id, { skipRefresh:true });
+            nodeControlState.activeNode = targetNode.id;
+          }
+        }
+      }
+    }
     nodeControlState.chainBackupsLastFetched = Date.now();
     renderChainControls();
-    const jobActiveNext = !!(nodeControlState.chainJob && (nodeControlState.chainJob.active || nodeControlState.chainJob.status === 'running'));
+    const jobActiveNext = isChainJobPollingActive();
     scheduleChainJobFollowup(jobActiveNext);
   }catch(err){
   nodeControlState.chainBackups = [];
