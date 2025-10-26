@@ -580,6 +580,17 @@ function buildChainJobMessage(job){
     return job.message || 'Canceling chain backup operation…';
   }
   const details = job.details || {};
+  if (job.status === 'success'){
+    const msg = job.message || 'Chain operation completed';
+    const sizeVal = Number(details.size);
+    if (Number.isFinite(sizeVal) && sizeVal > 0){
+      return `${msg} (${formatBytes(sizeVal)})`;
+    }
+    return msg;
+  }
+  if (job.status === 'error'){
+    return job.message || 'Chain operation failed';
+  }
   const progressLocked = !!details.__progress_locked;
   const isRunning = !!(job.active || job.status === 'running');
   if (isRunning && job.type === 'backup'){

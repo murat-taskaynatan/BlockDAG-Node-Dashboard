@@ -3846,19 +3846,17 @@ def _chain_restore_task(container_name: str, backup_name: str):
                         last_read = read_bytes
                     elapsed = time.time() - started_ts
                     estimated_total = float(total_bytes or 0) * RESTORE_PROGRESS_EXPANSION_FACTOR
-                    if estimated_total <= 0 and dir_size_bytes:
-                        estimated_total = float(dir_size_bytes) * max(RESTORE_PROGRESS_EXPANSION_FACTOR, 2.0)
+                    if dir_size_bytes and estimated_total <= float(dir_size_bytes):
+                        estimated_total = float(dir_size_bytes) * RESTORE_PROGRESS_EXPANSION_FACTOR
+                    if estimated_total <= float(read_bytes or 0.0):
+                        estimated_total = float(max(read_bytes or 0.0, dir_size_bytes or 0.0)) * RESTORE_PROGRESS_EXPANSION_FACTOR
+                    if estimated_total <= 0:
+                        estimated_total = float(max(read_bytes or 1.0, 1.0)) * RESTORE_PROGRESS_EXPANSION_FACTOR
                     progress_total = estimated_total
                     if dir_size_bytes:
-                        progress_total = max(progress_total, float(dir_size_bytes))
+                        progress_total = max(progress_total, float(dir_size_bytes) * RESTORE_PROGRESS_EXPANSION_FACTOR)
                     if read_bytes:
-                        if estimated_total <= 0:
-                            progress_total = max(progress_total, float(read_bytes) * max(RESTORE_PROGRESS_EXPANSION_FACTOR, 2.0))
-                        progress_total = max(progress_total, float(read_bytes) * 1.01)
-                    if progress_total <= 0 and read_bytes:
-                        progress_total = float(read_bytes) * max(RESTORE_PROGRESS_EXPANSION_FACTOR, 2.0)
-                    if progress_total > 0 and read_bytes and progress_total <= float(read_bytes):
-                        progress_total = float(read_bytes) * max(RESTORE_PROGRESS_EXPANSION_FACTOR, 2.0)
+                        progress_total = max(progress_total, float(read_bytes) * RESTORE_PROGRESS_EXPANSION_FACTOR)
                     rate = None
                     eta = None
                     remaining_bytes = None
@@ -3885,7 +3883,8 @@ def _chain_restore_task(container_name: str, backup_name: str):
                         loop_details["total"] = progress_total
                         if read_bytes:
                             try:
-                                percent = max(0.0, min(100.0, (float(read_bytes) / max(progress_total, 1e-9)) * 100.0))
+                                percent = float(read_bytes) / max(progress_total, 1e-9) * 100.0
+                                percent = max(0.0, min(percent, 99.0))
                             except Exception:
                                 percent = 0.0
                             loop_details["percent"] = percent
