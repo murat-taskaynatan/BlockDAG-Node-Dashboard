@@ -3168,6 +3168,9 @@ def _chain_job_snapshot():
 
 def _chain_job_start(job_type: str, message: str, details=None):
     now = datetime.utcnow().replace(tzinfo=timezone.utc).isoformat()
+    clean_details = dict(details or {})
+    for key in ("percent", "size", "total", "remaining", "eta", "rate", "__progress_locked"):
+        clean_details.pop(key, None)
     with _chain_job_lock:
         if _chain_job_state.get("active"):
             raise RuntimeError(f"Chain data operation already in progress ({_chain_job_state.get('type')})")
@@ -3181,7 +3184,7 @@ def _chain_job_start(job_type: str, message: str, details=None):
             "message": message,
             "started": now,
             "ended": None,
-            "details": details or {},
+            "details": clean_details,
         })
 
 
@@ -3219,16 +3222,6 @@ def _chain_job_progress(message: str, details=None):
                     if coerced_new < coerced_prev:
                         details = dict(details)
                         details["percent"] = coerced_prev
-                except Exception:
-                    pass
-            if "size" in details:
-                try:
-                    details["size"] = max(float(details["size"]), float(current.get("size") or 0.0))
-                except Exception:
-                    pass
-            if "total" in details:
-                try:
-                    details["total"] = max(float(details["total"]), float(current.get("total") or 0.0))
                 except Exception:
                     pass
             current.update(details)
