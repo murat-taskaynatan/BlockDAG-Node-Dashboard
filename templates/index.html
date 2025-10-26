@@ -1557,31 +1557,22 @@ async function refreshChainBackups(force = false){
     const sharedJob = nodeControlState.sharedChainJob;
     const rawStatus = (rawJob && rawJob.status ? String(rawJob.status).toLowerCase() : '');
     const rawRunning = !!(rawJob && (rawJob.active || rawStatus === 'running' || rawStatus === 'cancelling'));
-    const rawHasContainer = !!(rawJob && rawJob.details && typeof rawJob.details === 'object' && (rawJob.details.container || rawJob.details.target_container));
     let locatedJob = null;
     if (!rawRunning){
       locatedJob = await locateActiveChainJob(currentNodeId);
     }
-    let nextShared = sharedJob;
+    let activeJob = null;
     if (rawRunning){
-      nextShared = rawJob;
+      activeJob = rawJob;
     } else if (locatedJob && locatedJob.job){
-      nextShared = locatedJob.job;
-    } else if (!sharedJob || !(sharedJob.active || sharedJob.status === 'running')){
-      nextShared = rawJob;
+      activeJob = locatedJob.job;
     }
-    nodeControlState.sharedChainJob = nextShared || null;
-    if (rawRunning){
-      nodeControlState.chainJob = rawJob;
-    } else if (nextShared && (nextShared.active || nextShared.status === 'running' || nextShared.status === 'cancelling')){
-      nodeControlState.chainJob = nextShared;
-    } else {
-      nodeControlState.chainJob = null;
-    }
+    nodeControlState.sharedChainJob = activeJob || null;
+    nodeControlState.chainJob = activeJob || null;
     const jobDetails = (nodeControlState.chainJob && nodeControlState.chainJob.details) || {};
     const jobNodeId = (jobDetails.node || jobDetails.node_id || jobDetails.nodeId || '').toString().trim();
     const jobContainer = (jobDetails.container || jobDetails.target_container || '').trim();
-    if ((rawRunning || (nodeControlState.chainJob && nodeControlState.chainJob.active))){
+    if (activeJob && (activeJob.active || String(activeJob.status).toLowerCase() === 'running' || String(activeJob.status).toLowerCase() === 'cancelling')){
       if (jobNodeId && jobNodeId !== currentNodeId){
         autoSelectChainJobNode(jobNodeId);
       } else if (jobContainer){
@@ -1594,6 +1585,10 @@ async function refreshChainBackups(force = false){
           }
         }
       }
+    }
+    if (!activeJob && rawJob && rawJob.status && rawJob.message){
+      backupScanState = { message: rawJob.message, ok: rawStatus !== 'error' };
+      nodeControlState.renderedChainJobDigest = '';
     }
     nodeControlState.chainBackupsLastFetched = Date.now();
     renderChainControls();
