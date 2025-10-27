@@ -405,7 +405,16 @@ function getActiveNodeMeta(){
 function nodeDisplaySortValue(node){
   if (!node) return '\uffff';
   const containerLabel = (node.container || '').trim();
-  const display = containerLabel || (node.label || node.id || '');
+  const label = (node.label || '').trim();
+  const id = (node.id || '').trim();
+  const match = (containerLabel || label || id).match(/(\d+)$/);
+  if (match){
+    const num = parseInt(match[1], 10);
+    if (!Number.isNaN(num)){
+      return num.toString().padStart(5, '0');
+    }
+  }
+  const display = containerLabel || label || id;
   return display.toLowerCase();
 }
 
