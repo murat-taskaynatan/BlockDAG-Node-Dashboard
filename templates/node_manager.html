@@ -1,0 +1,172 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>BlockDAG Node Manager</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="https://blockdag.network/images/presskit/Symbol.svg">
+<style>
+  :root { --bg:#0b1020; --card:#121a33; --text:#e7eaf6; --muted:#9aa4c7; --ok:#25d366; --bad:#ff5370; --warn:#ffb74d; }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);font-family:ui-sans-serif,system-ui,Segoe UI,Roboto,Helvetica,Arial}
+  .wrap{max-width:1200px;margin:24px auto;padding:0 18px 64px}
+  .card{background:var(--card);border-radius:16px;box-shadow:0 4px 18px rgba(0,0,0,.25);padding:18px}
+  .title{font-weight:600;font-size:22px;margin:0;display:flex;align-items:center;gap:10px}
+  .header{display:flex;align-items:center;gap:10px;justify-content:space-between;margin-bottom:18px;padding:0 4px}
+  .header img{border-radius:6px;height:40px;width:40px}
+  .pill{display:inline-flex;align-items:center;gap:6px;border-radius:999px;padding:6px 16px;font-size:12px;background:rgba(255,255,255,.08);font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:var(--muted)}
+  .stack{display:grid;gap:18px}
+  .summary-header{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:12px}
+  .summary-desc{margin:4px 0 0;color:var(--muted);font-size:13px}
+  .summary-actions{display:flex;gap:10px;flex-wrap:wrap}
+  .summary-stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px}
+  .kv{background:rgba(255,255,255,.04);border-radius:12px;padding:12px 14px}
+  .kv .k{color:var(--muted);font-size:12px;text-transform:uppercase;letter-spacing:.06em}
+  .kv .v{font-size:22px;font-weight:600;margin-top:6px;font-variant-numeric:tabular-nums}
+  .btn{padding:.5rem .9rem;border:1px solid #3a4a7a;border-radius:10px;background:transparent;color:inherit;cursor:pointer;font-weight:600;letter-spacing:.02em;display:inline-flex;align-items:center;gap:6px}
+  .btn:disabled{opacity:.6;cursor:default}
+  .btn--primary{background:rgba(37,211,102,.15);border-color:rgba(37,211,102,.4);color:#44f2a8}
+  .btn--primary .icon{font-size:14px}
+  .btn--ghost{border-color:rgba(154,164,199,.35);color:var(--muted)}
+  .fleet-grid{display:grid;gap:14px}
+  details.fleet-card{background:var(--card);border-radius:16px;box-shadow:0 4px 16px rgba(0,0,0,.2);padding:0;border:1px solid rgba(255,255,255,.04)}
+  .fleet-card[open]{animation:pop .25s ease}
+  summary.fleet-summary{list-style:none;margin:0;padding:16px 18px;border-bottom:1px solid rgba(255,255,255,.04);display:flex;align-items:center;justify-content:space-between;cursor:pointer}
+  summary.fleet-summary::-webkit-details-marker{display:none}
+  .summary-main{display:flex;flex-direction:column;gap:4px}
+  .node-name{font-size:18px;font-weight:600}
+  .node-meta{font-size:13px;color:var(--muted)}
+  .summary-actions{display:flex;align-items:center;gap:10px}
+  .icon-btn{width:36px;height:36px;border-radius:10px;border:1px solid rgba(255,255,255,.1);background:transparent;color:inherit;display:inline-flex;align-items:center;justify-content:center;cursor:pointer;transition:background .2s,border .2s,color .2s}
+  .icon-btn:hover:not(:disabled){background:rgba(255,255,255,.08)}
+  .icon-btn.play[data-paused=\"1\"] .icon{transform:none}
+  .icon-btn.play .icon{font-size:16px;transform:translateX(1px)}
+  .icon-btn.restart{color:#ffb74d;border-color:rgba(255,183,77,.4)}
+  .icon-btn[disabled]{opacity:.5;cursor:default}
+  .fleet-body{padding:0 18px 18px;display:grid;gap:12px}
+  .node-status{font-size:13px;color:var(--muted);display:flex;align-items:center;gap:6px}
+  .node-status.is-ok{color:var(--ok)}
+  .node-status.is-warn{color:var(--warn)}
+  .node-status .indicator{width:10px;height:10px;border-radius:999px;background:currentColor;display:inline-block}
+  .node-stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px}
+  .node-stats .kv{background:rgba(255,255,255,.03);padding:10px 12px}
+  .node-stats .k{font-size:11px}
+  .node-stats .v{font-size:18px;margin-top:4px}
+  .chart-wrap{background:rgba(255,255,255,.04);border-radius:14px;padding:12px}
+  .chart-wrap canvas{width:100%;height:220px;background:rgba(0,0,0,.12);border-radius:10px;padding:6px}
+  .fleet-footer{display:flex;justify-content:flex-end;padding:0 18px 16px}
+  .fleet-footer .timestamp{font-size:12px;color:var(--muted)}
+  .empty-state{padding:20px;border:1px dashed rgba(255,255,255,.15);border-radius:14px;text-align:center;color:var(--muted);font-size:14px}
+  template{display:none}
+  @keyframes pop{from{transform:scale(.98);opacity:.85}to{transform:scale(1);opacity:1}}
+  @media (max-width:840px){
+    summary.fleet-summary{flex-wrap:wrap;gap:8px}
+    .summary-actions{width:100%;justify-content:flex-start}
+    .chart-wrap canvas{height:200px}
+  }
+</style>
+
+<div class="wrap">
+  <div class="header">
+    <div style="display:flex;align-items:center;gap:10px">
+      <img src="{{ url_for('static', filename='3d.gif') }}" alt="BlockDAG">
+      <h1 class="title">BlockDAG Node Manager</h1>
+    </div>
+    <span class="pill" id="globalSummaryBadge">Loading…</span>
+  </div>
+
+  <div class="stack">
+    <div class="card summary-card">
+      <div class="summary-header">
+        <div>
+          <div class="title">Global Summary</div>
+          <p class="summary-desc">Real-time snapshot of every node discovered on the local network.</p>
+        </div>
+        <div class="summary-actions">
+          <button class="btn btn--ghost" id="btnRefreshFleet">Refresh</button>
+          <button class="btn btn--primary" id="btnDiscoverNodes">
+            <span class="icon">🔍</span>
+            Search Nodes
+          </button>
+        </div>
+      </div>
+      <div class="summary-stats" id="summaryStats">
+        <div class="kv">
+          <div class="k">Detected Nodes</div>
+          <div class="v" id="statNodeCount">—</div>
+        </div>
+        <div class="kv">
+          <div class="k">Online</div>
+          <div class="v" id="statOnline">—</div>
+        </div>
+        <div class="kv">
+          <div class="k">Offline</div>
+          <div class="v" id="statOffline">—</div>
+        </div>
+        <div class="kv">
+          <div class="k">Highest Local Height</div>
+          <div class="v" id="statMaxLocal">—</div>
+        </div>
+        <div class="kv">
+          <div class="k">Highest Remote Height</div>
+          <div class="v" id="statMaxRemote">—</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card" id="emptyFleetState" style="display:none;">
+      <div class="empty-state">
+        <p>No nodes detected yet. Use <strong>Search Nodes</strong> to discover BlockDAG containers reachable from this host.</p>
+      </div>
+    </div>
+
+    <div class="fleet-grid" id="fleetCards"></div>
+  </div>
+</div>
+
+<template id="nodeCardTemplate">
+  <details class="fleet-card" open>
+    <summary class="fleet-summary">
+      <div class="summary-main">
+        <span class="node-name">Node</span>
+        <span class="node-meta">—</span>
+      </div>
+      <div class="summary-actions">
+        <button class="icon-btn play" data-action="toggle" aria-label="Pause sampling">
+          <span class="icon">⏸</span>
+        </button>
+        <button class="icon-btn restart" data-action="restart" aria-label="Restart container">
+          <span class="icon">⟳</span>
+        </button>
+      </div>
+    </summary>
+    <div class="fleet-body">
+      <div class="node-status"><span class="indicator"></span><span class="status-text">Checking…</span></div>
+      <div class="node-stats">
+        <div class="kv">
+          <div class="k">Local Height</div>
+          <div class="v stat-local">—</div>
+        </div>
+        <div class="kv">
+          <div class="k">Remote Height</div>
+          <div class="v stat-remote">—</div>
+        </div>
+        <div class="kv">
+          <div class="k">Height Δ</div>
+          <div class="v stat-delta">—</div>
+        </div>
+        <div class="kv">
+          <div class="k">Peers</div>
+          <div class="v stat-peers">—</div>
+        </div>
+      </div>
+      <div class="chart-wrap">
+        <canvas></canvas>
+      </div>
+      <div class="fleet-footer">
+        <span class="timestamp">Updated <span class="stat-updated">—</span></span>
+      </div>
+    </div>
+  </details>
+</template>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js" integrity="sha256-xylxWxECh9y9dRonwgPu1rxW3t+V5zcV7bZPvGbkx1c=" crossorigin="anonymous"></script>
+<script src="{{ url_for('static', filename='node_manager.js') }}"></script>

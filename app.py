@@ -3518,6 +3518,67 @@ def _container_running_state(name: str) -> tuple[bool, bool]:
         return False, False
     return True, False
 
+def _container_status_for(ctx: "NodeContext") -> tuple[bool, bool]:
+    if not ctx.container or not ALLOW_DOCKER:
+        return True, True
+    try:
+        exists, running = _container_running_state(ctx.container)
+    except Exception:
+        exists, running = False, False
+    return exists, running
+
+
+def _fleet_series_snapshot(ctx: "NodeContext", *, limit: int = WINDOW, include_series: bool = False) -> dict:
+    with ctx.lock:
+        local_points = list(ctx.height_series)[-limit:]
+        remote_points = list(ctx.remote_height_series)[-limit:]
+        peers_points = list(ctx.peers_series)
+    labels = [ts for ts, _ in local_points]
+    local_series = [val if val is not None else 0 for _, val in local_points]
+    remote_lookup = {ts: val for ts, val in remote_points}
+    remote_series = [remote_lookup.get(ts) if remote_lookup.get(ts) is not None else None for ts in labels]
+
+    local_height = local_series[-1] if local_series else 0
+    remote_height = None
+    if remote_series:
+        for val in reversed(remote_series):
+            if val is not None:
+                remote_height = val
+                break
+    if remote_height is None:
+        remote_height = 0
+    peers_value = peers_points[-1][1] if peers_points else 0
+
+    payload = {
+        "local_height": int(local_height or 0),
+        "remote_height": int(remote_height or 0),
+        "height_delta": int((remote_height or 0) - (local_height or 0)),
+        "peers": int(peers_value or 0),
+        "last_updated": int(labels[-1]) if labels else int(time.time() * 1000),
+    }
+    if include_series:
+        payload["labels"] = labels
+        payload["local"] = local_series
+        payload["remote"] = [val if val is not None else None for val in remote_series]
+    return payload
+
+
+def _fleet_summary_from_nodes(nodes: list[dict]) -> dict:
+    count = len(nodes)
+    running = sum(1 for node in nodes if node.get("status", {}).get("running"))
+    offline = max(count - running, 0)
+    local_heights = [node.get("status", {}).get("local_height") for node in nodes if node.get("status", {}).get("local_height")]
+    remote_heights = [node.get("status", {}).get("remote_height") for node in nodes if node.get("status", {}).get("remote_height")]
+    summary = {
+        "count": count,
+        "running": running,
+        "offline": offline,
+        "max_local_height": max(local_heights) if local_heights else 0,
+        "max_remote_height": max(remote_heights) if remote_heights else 0,
+        "timestamp": time.time(),
+    }
+    return summary
+
 
 def _is_container_running(name: str) -> bool:
     _exists, running = _container_running_state(name)
@@ -4601,6 +4662,72 @@ def api_logs_recent():
 @app.route("/healthz")
 def healthz():
     return "ok\n", 200, {"content-type":"text/plain; charset=utf-8"}
+
+
+
+@app.route("/node-manager")
+def node_manager_view():
+    return render_template("node_manager.html", app_version=APP_VERSION, app_version_display=APP_VERSION_DISPLAY)
+
+
+@app.route("/api/node-manager/nodes")
+def api_node_manager_nodes():
+    nodes_payload = []
+    for ctx in NODES.values():
+        metrics = _fleet_series_snapshot(ctx, include_series=False)
+        exists, running = _container_status_for(ctx)
+        metrics["running"] = bool(running and exists)
+        nodes_payload.append({
+            "id": ctx.id,
+            "label": ctx.label,
+            "container": ctx.container,
+            "auto_discovered": bool(getattr(ctx, "auto_discovered", False)),
+            "status": metrics,
+        })
+    summary = _fleet_summary_from_nodes(nodes_payload) if nodes_payload else {
+        "count": 0,
+        "running": 0,
+        "offline": 0,
+        "max_local_height": 0,
+        "max_remote_height": 0,
+        "timestamp": time.time(),
+    }
+    return jsonify({"nodes": nodes_payload, "summary": summary})
+
+
+@app.route("/api/node-manager/metrics")
+def api_node_manager_metrics():
+    nodes_param = request.args.get("nodes", "")
+    if nodes_param:
+        node_ids = [item.strip() for item in nodes_param.split(',') if item.strip()]
+    else:
+        node_ids = [ctx.id for ctx in NODES.values()]
+    response = {}
+    for node_id in node_ids:
+        ctx = get_node_context(node_id, None, allow_default=False)
+        if not ctx:
+            continue
+        metrics = _fleet_series_snapshot(ctx, include_series=True)
+        exists, running = _container_status_for(ctx)
+        metrics["running"] = bool(running and exists)
+        response[ctx.id] = metrics
+    return jsonify({"nodes": response, "timestamp": time.time()})
+
+
+@app.route("/api/node-manager/discover", methods=["POST"])
+def api_node_manager_discover():
+    try:
+        added, removed, updated = refresh_discovered_nodes()
+        return jsonify({
+            "ok": True,
+            "added": list(added),
+            "removed": list(removed),
+            "updated": list(updated),
+            "count": len(NODES),
+        })
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
 
 if __name__ == "__main__":
     host = os.getenv("HOST", "0.0.0.0")
