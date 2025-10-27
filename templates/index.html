@@ -1770,7 +1770,7 @@ function renderChainControls(){
     setButtonDisabledState(restoreBtn, true);
     setButtonDisabledState(deleteBtn, true);
     setButtonDisabledState(cancelBtn, jobCancelling);
-    cancelBtn.textContent = jobCancelling ? 'Stopping…' : 'Stop';
+    cancelBtn.textContent = jobCancelling ? 'Stopping…' : 'Cancel';
     select.disabled = true;
     setButtonDisabledState(scanBtn, true, { keepWhenBusy: true });
   } else {
@@ -1779,7 +1779,7 @@ function renderChainControls(){
     setButtonDisabledState(restoreBtn, !enabled || !select.value || !hasBackups);
     setButtonDisabledState(deleteBtn, !enabled || !select.value || !hasBackups);
     setButtonDisabledState(cancelBtn, true);
-    cancelBtn.textContent = 'Stop';
+    cancelBtn.textContent = 'Cancel';
     setButtonDisabledState(scanBtn, false, { keepWhenBusy: true });
     if (job && (jobDisplayMessage || job.message)){
       backupScanState = { message:'', ok:true };
