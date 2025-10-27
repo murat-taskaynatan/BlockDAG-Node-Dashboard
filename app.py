@@ -4106,6 +4106,18 @@ def _chain_restore_task(container_name: str, backup_name: str):
                 restart_error = str(exc)
         details["daemon_restart_scheduled"] = daemon_triggered
         details["container_restarted"] = container_restarted
+        ensure_started = False
+        ensure_start_error = None
+        if not cancelled and container_name:
+            try:
+                if not _is_container_running(container_name):
+                    _start_container_for_job(container_name)
+                    ensure_started = True
+            except Exception as exc:
+                ensure_start_error = str(exc)
+        if ensure_started:
+            details["container_restarted"] = True
+        details["container_started"] = ensure_started or bool(container_restarted)
         dashboard_restart_ok = False
         dashboard_restart_error = None
         if not cancelled:
@@ -4139,6 +4151,9 @@ def _chain_restore_task(container_name: str, backup_name: str):
             status = "error"
         elif restart_error and not cancelled:
             message = f"{message} (failed to restart container: {restart_error})"
+            status = "error"
+        elif ensure_start_error and not cancelled:
+            message = f"{message} (failed to start container: {ensure_start_error})"
             status = "error"
         elif dashboard_restart_error and not cancelled:
             message = f"{message} (dashboard restart issue: {dashboard_restart_error})"
