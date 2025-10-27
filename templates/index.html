@@ -1637,6 +1637,12 @@ function renderChainControls(){
     if (jobActive && jobType === 'restore' && !jobActiveOnThisNode){
       statusText = `Restore running on ${jobNodeLabel}`;
     }
+    if (jobActive && jobType === 'restore' && jobActiveOnThisNode && jobMessage){
+      const lowered = jobMessage.toLowerCase();
+      if (lowered.includes('restoring') && lowered.includes('%')){
+        statusText = jobMessage;
+      }
+    }
     setChainControlStatus(statusText, job.status !== 'error');
     nodeControlState.renderedChainJobDigest = jobDigest || statusText || '';
     setButtonDisabledState(backupBtn, true);
