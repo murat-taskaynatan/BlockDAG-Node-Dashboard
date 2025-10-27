@@ -1317,8 +1317,10 @@ function updateNodeContainerDetails(){
   const autoHours = Number.isFinite(autoInfo?.interval_hours) ? Math.max(1, Math.round(autoInfo.interval_hours)) : AUTO_RESTART_DEFAULT_HOURS;
   const autoBackupInfo = containerEntry && containerEntry.auto_backup;
   const autoBackupEnabled = !!(autoBackupInfo && autoBackupInfo.installed && (autoBackupInfo.enabled || autoBackupInfo.active));
-  const autoBackupHours = Number.isFinite(autoBackupInfo?.interval_hours) ? Math.max(1, Math.round(autoBackupInfo.interval_hours)) : AUTO_BACKUP_DEFAULT_HOURS;
-  const autoBackupLimit = Number.isFinite(autoBackupInfo?.max_backups) ? Math.max(1, Math.round(autoBackupInfo.max_backups)) : AUTO_BACKUP_DEFAULT_LIMIT;
+  const hasBackupInterval = Number.isFinite(autoBackupInfo?.interval_hours) && autoBackupInfo.interval_hours > 0;
+  const autoBackupHours = hasBackupInterval ? Math.max(1, Math.round(autoBackupInfo.interval_hours)) : null;
+  const hasBackupLimit = Number.isFinite(autoBackupInfo?.max_backups) && autoBackupInfo.max_backups > 0;
+  const autoBackupLimit = hasBackupLimit ? Math.max(1, Math.round(autoBackupInfo.max_backups)) : null;
 
   if (hoursInput && !autoRestartUI.toggle){
     hoursInput.disabled = true;
@@ -1344,13 +1346,18 @@ function updateNodeContainerDetails(){
     tooltip: tooltipBase || 'Toggle automatic container restart'
   });
 
-  autoBackupUI.update({
+  const backupUpdatePayload = {
     enabled: autoBackupEnabled,
-    hours: autoBackupHours,
-    max: autoBackupLimit,
     disabled: !canControl,
     tooltip: tooltipBase || 'Toggle automatic chain backup'
-  });
+  };
+  if (autoBackupHours !== null){
+    backupUpdatePayload.hours = autoBackupHours;
+  }
+  if (autoBackupLimit !== null){
+    backupUpdatePayload.max = autoBackupLimit;
+  }
+  autoBackupUI.update(backupUpdatePayload);
 
   if (toggleBtn){
     const statusText = String(containerEntry?.status || '');
