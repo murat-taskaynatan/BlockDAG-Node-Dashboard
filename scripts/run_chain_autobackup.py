@@ -3,9 +3,36 @@
 
 import argparse
 import json
+import os
 import sys
 import urllib.request
 import urllib.error
+from pathlib import Path
+
+
+STATE_DIR = Path(os.getenv("BDAG_AUTOBACKUP_STATE_DIR", "/var/lib/blockdag-autobackup"))
+
+
+def sanitize_name(name: str) -> str:
+    text = (name or "").strip().lower()
+    cleaned = [ch if ch.isalnum() or ch in "_.-" else '-' for ch in text]
+    result = ''.join(cleaned).strip('-')
+    return result or "container"
+
+
+def is_first_run(container: str) -> bool:
+    try:
+        STATE_DIR.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        return False
+    sentinel = STATE_DIR / f"{sanitize_name(container)}.initialized"
+    if sentinel.exists():
+        return False
+    try:
+        sentinel.write_text("initialized\n", encoding="utf-8")
+    except Exception:
+        return False
+    return True
 
 
 def build_parser():
@@ -36,6 +63,10 @@ def post_control(url, payload):
 def main(argv):
     args = build_parser().parse_args(argv)
     url = args.url.rstrip("/") + "/api/control"
+    if is_first_run(args.container):
+        print("Auto backup schedule initialized. First run will occur at the next interval.")
+        return 0
+
     payload = {
         "action": "auto_backup_run",
         "container": args.container,
