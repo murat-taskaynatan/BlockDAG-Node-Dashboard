@@ -2,7 +2,8 @@
 
 A Flask-based monitoring dashboard for BlockDAG Network nodes. The UI surfaces node health, peers, RPC latency, and block activity, plus live charts for peers, latency, and block throughput.
 
-<img width="971" height="977" alt="image" src="https://github.com/user-attachments/assets/78770997-7587-488d-95df-371759a01582" />
+<img width="1085" height="1077" alt="image" src="https://github.com/user-attachments/assets/3b696666-a05b-46d7-a9db-1a179c91f502" />
+
 
 
 
