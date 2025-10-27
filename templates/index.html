@@ -1401,9 +1401,9 @@ function renderNodeControls(errorMsg){
         if (aVal === bVal){
           const aId = (a && a.id) || '';
           const bId = (b && b.id) || '';
-          return aId.localeCompare(bId);
+          return bId.localeCompare(aId);
         }
-        return aVal.localeCompare(bVal);
+        return bVal.localeCompare(aVal);
       });
       sortedNodes.forEach(node => {
         if (!node || !node.id) return;
