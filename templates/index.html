@@ -60,6 +60,8 @@
 .auto-hours__suffix{font-size:11px;opacity:.75;text-transform:uppercase;letter-spacing:.06em;margin-right:4px}
 .auto-max__suffix{font-size:11px;opacity:.75;text-transform:uppercase;letter-spacing:.06em;margin-right:4px}
 .auto-block{display:flex;flex-direction:column;gap:6px}
+.auto-toggle--backup.is-disabled .auto-hours input,
+.auto-toggle--backup.is-disabled .auto-max input{opacity:.6}
 .node-ctrls label span{opacity:.7;font-size:11px;text-transform:uppercase;letter-spacing:.06em}
 .node-ctrls input{background:transparent;border:1px solid #3a4a7a;border-radius:.6rem;padding:.35rem .6rem;color:inherit}
 .node-ctrls select{width:100%;appearance:none;background-color:rgba(255,255,255,.06);border:1px solid #3a4a7a;border-radius:.6rem;padding:.35rem .6rem;color:var(--text);background-image:linear-gradient(45deg,transparent 50%,currentColor 50%),linear-gradient(135deg,currentColor 50%,transparent 50%);background-position:calc(100% - 18px) calc(50% - 3px),calc(100% - 12px) calc(50% - 3px);background-size:6px 6px;background-repeat:no-repeat;padding-right:1.8rem}
@@ -396,6 +398,45 @@ const BACKUP_STATUS_DEFAULT = '';
 let chainJobAutoSelect = false;
 let chainJobManualSelection = false;
 
+function getActiveNodeMeta(){
+  return knownNodes.find(n => n && n.id === currentNodeId) || null;
+}
+
+function nodeDisplaySortValue(node){
+  if (!node) return '\uffff';
+  const containerLabel = (node.container || '').trim();
+  const display = containerLabel || (node.label || node.id || '');
+  return display.toLowerCase();
+}
+
+function getActiveContainerEntry(){
+  const node = getActiveNodeMeta();
+  if (!node || !node.container) return null;
+  return findContainer(node.container);
+}
+
+function formatBytes(bytes){
+  const num = Number(bytes);
+  if (!Number.isFinite(num) || num < 0) return '';
+  if (num === 0) return '0 B';
+  const units = ['B','KB','MB','GB','TB'];
+  let value = num;
+  let unitIndex = 0;
+  while (value >= 1024 && unitIndex < units.length - 1){
+    value /= 1024;
+    unitIndex++;
+  }
+  const digits = value >= 100 ? 0 : value >= 10 ? 1 : 2;
+  return `${value.toFixed(digits)} ${units[unitIndex]}`;
+}
+
+function formatTimestamp(ts){
+  if (!ts) return '';
+  const date = new Date(ts);
+  if (!Number.isFinite(date.getTime())) return '';
+  return date.toLocaleString(undefined, { hour12:false });
+}
+
 function _showDefaultBackupStatus(){
   if (backupScanTimer){
     clearTimeout(backupScanTimer);
@@ -496,15 +537,27 @@ const autoBackupUI = (() => {
       if (max !== undefined && Number.isFinite(max) && max > 0){
         maxInput.value = Math.max(1, Math.round(max));
       }
-      if (tooltip !== undefined && checkbox.parentElement){
-        checkbox.parentElement.setAttribute('title', tooltip || '');
+      const wrapper = checkbox?.closest('.auto-toggle--backup');
+      if (tooltip !== undefined && wrapper){
+        wrapper.setAttribute('title', tooltip || '');
       }
       if (disabled !== undefined){
-        checkbox.disabled = !!disabled;
+        const shouldDisable = !!disabled;
+        checkbox.disabled = shouldDisable;
+        const inputsDisabled = shouldDisable || !!checkbox.checked;
+        hoursInput.disabled = inputsDisabled;
+        maxInput.disabled = inputsDisabled;
+        if (wrapper){
+          wrapper.classList.toggle('is-disabled', inputsDisabled);
+        }
+      } else {
+        const inputsDisabled = checkbox.disabled || !!checkbox.checked;
+        hoursInput.disabled = inputsDisabled;
+        maxInput.disabled = inputsDisabled;
+        if (wrapper){
+          wrapper.classList.toggle('is-disabled', inputsDisabled);
+        }
       }
-      const toggleDisabled = checkbox.disabled || !checkbox.checked;
-      hoursInput.disabled = toggleDisabled;
-      maxInput.disabled = toggleDisabled;
     },
     setState(enabled, hours, max){
       this.update({ enabled, hours, max });
@@ -538,45 +591,6 @@ const autoBackupUI = (() => {
   };
   return api;
 })();
-
-function getActiveNodeMeta(){
-  return knownNodes.find(n => n && n.id === currentNodeId) || null;
-}
-
-function nodeDisplaySortValue(node){
-  if (!node) return '\uffff';
-  const containerLabel = (node.container || '').trim();
-  const display = containerLabel || (node.label || node.id || '');
-  return display.toLowerCase();
-}
-
-function getActiveContainerEntry(){
-  const node = getActiveNodeMeta();
-  if (!node || !node.container) return null;
-  return findContainer(node.container);
-}
-
-function formatBytes(bytes){
-  const num = Number(bytes);
-  if (!Number.isFinite(num) || num < 0) return '';
-  if (num === 0) return '0 B';
-  const units = ['B','KB','MB','GB','TB'];
-  let value = num;
-  let unitIndex = 0;
-  while (value >= 1024 && unitIndex < units.length - 1){
-    value /= 1024;
-    unitIndex++;
-  }
-  const digits = value >= 100 ? 0 : value >= 10 ? 1 : 2;
-  return `${value.toFixed(digits)} ${units[unitIndex]}`;
-}
-
-function formatTimestamp(ts){
-  if (!ts) return '';
-  const date = new Date(ts);
-  if (!Number.isFinite(date.getTime())) return '';
-  return date.toLocaleString(undefined, { hour12:false });
-}
 
 function formatDuration(seconds){
   const total = Math.max(0, Math.floor(Number(seconds) || 0));
