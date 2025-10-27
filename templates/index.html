@@ -42,6 +42,25 @@
   width:110px !important;
   flex:0 0 110px !important;
 }
+.node-ctrls__row--primary[data-locked="1"]{
+  position:relative;
+}
+.node-ctrls__row--primary[data-locked="1"]::after{
+  content: attr(data-lock-reason);
+  position:absolute;
+  inset:auto 0 -1.1rem 0;
+  text-align:center;
+  font-size:11px;
+  letter-spacing:.05em;
+  text-transform:uppercase;
+  color:var(--muted);
+  pointer-events:none;
+}
+.node-ctrls__row--primary[data-locked="1"] .node-ctrls__field--node,
+.node-ctrls__row--primary[data-locked="1"] .node-ctrls__field--node select{
+  pointer-events:auto;
+  opacity:1;
+}
 .node-ctrls__actions--auto{margin-left:20px;display:flex;flex-wrap:wrap;align-items:flex-start;gap:16px}
 .node-ctrls__actions--auto .btn{
   min-width:140px;
@@ -60,6 +79,7 @@
 .auto-hours__suffix{font-size:11px;opacity:.75;text-transform:uppercase;letter-spacing:.06em;margin-right:4px}
 .auto-max__suffix{font-size:11px;opacity:.75;text-transform:uppercase;letter-spacing:.06em;margin-right:4px}
 .auto-block{display:flex;flex-direction:column;gap:6px}
+.auto-toggle--restart.is-disabled .auto-hours input,
 .auto-toggle--backup.is-disabled .auto-hours input,
 .auto-toggle--backup.is-disabled .auto-max input{opacity:.6}
 .node-ctrls label span{opacity:.7;font-size:11px;text-transform:uppercase;letter-spacing:.06em}
@@ -190,7 +210,7 @@
           <div class="node-ctrls__actions node-ctrls__actions--auto">
             <div class="auto-block auto-block--restart">
               <span class="node-ctrls__label">Auto restart</span>
-              <div class="auto-toggle">
+              <div class="auto-toggle auto-toggle--restart">
                 <label class="toggle">
                   <input type="checkbox" id="autoRestartToggle" disabled>
                   <span class="toggle-slider"></span>
@@ -388,7 +408,7 @@ const activitySeriesLabels = {
 const baseChartLabels = { peers: 'Peers', latency: 'RPC Latency (ms)' };
 const NODE_CTRL_REFRESH_MS = 10000;
 const CHAIN_JOB_ACTIVE_REFRESH_MS = 2500;
-const nodeControlState = { enabled:false, hostMode:false, containers:[], nodes:[], activeNode:null, lastFetched:0, chainBackups:[], chainBackupsLastFetched:0, chainJob:null, sharedChainJob:null, chainEnabled:false, chainEnabledServer:false, renderedChainJobDigest:'' };
+const nodeControlState = { enabled:false, hostMode:false, containers:[], nodes:[], activeNode:null, lastFetched:0, chainBackups:[], chainBackupsLastFetched:0, chainJob:null, sharedChainJob:null, chainEnabled:false, chainEnabledServer:false, renderedChainJobDigest:'', containerControlsEnabled:false };
 let chainJobPollTimer = null;
 let backupScanState = { message:'', ok:true };
 let backupScanTimer = null;
@@ -397,6 +417,9 @@ let suppressChainStatusTimer = false;
 const BACKUP_STATUS_DEFAULT = '';
 let chainJobAutoSelect = false;
 let chainJobManualSelection = false;
+let nodeJobLockActive = false;
+let nodeJobLockReason = '';
+let chainJobClearTimer = null;
 
 function getActiveNodeMeta(){
   return knownNodes.find(n => n && n.id === currentNodeId) || null;
@@ -491,7 +514,12 @@ const autoRestartUI = (() => {
       if (disabled !== undefined){
         checkbox.disabled = !!disabled;
       }
-      hoursInput.disabled = checkbox.disabled || !checkbox.checked;
+      const inputsDisabled = checkbox.disabled || !!checkbox.checked;
+      hoursInput.disabled = inputsDisabled;
+      const wrapper = checkbox?.closest('.auto-toggle--restart');
+      if (wrapper){
+        wrapper.classList.toggle('is-disabled', inputsDisabled);
+      }
     },
     setState(enabled, hours){
       this.update({ enabled, hours });
@@ -1141,27 +1169,60 @@ function setNodeControlStatus(msg, ok = true){
   el.style.color = color;
 }
 
-function setNodeControlButtonsDisabled(disabled){
+function setNodeControlButtonsDisabled(disabled, { includeChain = true, reason = '' } = {}){
+  const shouldDisable = !!disabled;
+  const reasonText = (reason || '').trim();
   document.querySelectorAll('#nodeControlsCard [data-node-action]').forEach(btn => {
-    const action = btn?.dataset?.nodeAction || '';
-    btn.disabled = !!disabled;
-    if (action !== 'chain_cancel' && btn.style){
-      btn.style.opacity = disabled ? '0.45' : '1';
+    if (!btn) return;
+    const action = (btn.dataset?.nodeAction || '').toLowerCase();
+    if (!includeChain && action.startsWith('chain_')){
+      return;
+    }
+    const isChainAction = action.startsWith('chain_');
+    const lockedByJob = nodeJobLockActive && !isChainAction;
+    if (!shouldDisable && lockedByJob){
+      setButtonDisabledState(btn, true);
+      if (nodeJobLockReason){
+        btn.dataset.disabledReason = nodeJobLockReason;
+        if (!isChainAction){
+          btn.title = nodeJobLockReason;
+        }
+        setPrimaryControlsLocked(true, nodeJobLockReason);
+      }
+      return;
+    }
+    setButtonDisabledState(btn, shouldDisable);
+    if (shouldDisable && reasonText){
+      btn.dataset.disabledReason = reasonText;
+      if (!action.startsWith('chain_')){
+        btn.title = reasonText;
+      }
+    } else if (!shouldDisable && btn.dataset.disabledReason){
+      if (nodeJobLockActive && btn.dataset.disabledReason === nodeJobLockReason && !action.startsWith('chain_')){
+        return;
+      }
+      if (btn.title === btn.dataset.disabledReason){
+        btn.title = '';
+      }
+      delete btn.dataset.disabledReason;
     }
   });
-  if (disabled){
-    const toggle = autoRestartUI.toggle;
-    if (toggle && toggle.dataset.pending === '1'){
-      autoRestartUI.update({ disabled: true });
+  if (shouldDisable){
+    const toggleMessage = reasonText || 'Operation in progress';
+    const restartToggle = autoRestartUI.toggle;
+    if (restartToggle && restartToggle.dataset.pending === '1'){
+      autoRestartUI.update({ disabled: true, tooltip: toggleMessage });
     } else {
-      autoRestartUI.setDisabled(true, 'Operation in progress');
+      autoRestartUI.setDisabled(true, toggleMessage);
     }
     const backupToggle = autoBackupUI.toggle;
     if (backupToggle && backupToggle.dataset.pending === '1'){
-      autoBackupUI.update({ disabled: true });
+      autoBackupUI.update({ disabled: true, tooltip: toggleMessage });
     } else {
-      autoBackupUI.setDisabled(true, 'Operation in progress');
+      autoBackupUI.setDisabled(true, toggleMessage);
     }
+  } else if (includeChain){
+    updateNodeContainerDetails();
   }
 }
 
@@ -1266,6 +1327,22 @@ function setChainControlButtonsDisabled(disabled){
   }
 }
 
+function setPrimaryControlsLocked(active, reason = ''){
+  const row = document.querySelector('#nodeControlsCard .node-ctrls__row--primary');
+  if (!row) return;
+  if (active){
+    row.setAttribute('data-locked', '1');
+    if (reason){
+      row.setAttribute('data-lock-reason', reason);
+    } else {
+      row.removeAttribute('data-lock-reason');
+    }
+  } else {
+    row.removeAttribute('data-locked');
+    row.removeAttribute('data-lock-reason');
+  }
+}
+
 function findContainer(name){
   if (!name) return null;
   return (nodeControlState.containers || []).find(item => item && item.name === name) || null;
@@ -1311,7 +1388,9 @@ function updateNodeContainerDetails(){
   const activeNode = getActiveNodeMeta();
   const containerEntry = getActiveContainerEntry();
   const containerName = activeNode && activeNode.container ? activeNode.container : '';
-  const canControl = !hostMode && !!containerEntry;
+  const controlsLocked = !!nodeJobLockActive;
+  const lockReason = nodeJobLockReason || 'Operation in progress';
+  const canControl = !hostMode && !!containerEntry && !controlsLocked;
   const autoInfo = containerEntry && containerEntry.auto_restart;
   const autoEnabled = !!(autoInfo && autoInfo.installed && (autoInfo.enabled || autoInfo.active));
   const autoHours = Number.isFinite(autoInfo?.interval_hours) ? Math.max(1, Math.round(autoInfo.interval_hours)) : AUTO_RESTART_DEFAULT_HOURS;
@@ -1338,18 +1417,20 @@ function updateNodeContainerDetails(){
     if (!containerEntry) return 'Container status unavailable';
     return '';
   })();
+  const controlDisabledTooltip = controlsLocked ? lockReason : (tooltipBase || 'Toggle automatic container restart');
+  const backupDisabledTooltip = controlsLocked ? lockReason : (tooltipBase || 'Toggle automatic chain backup');
 
   autoRestartUI.update({
     enabled: autoEnabled,
     hours: autoHours,
     disabled: !canControl,
-    tooltip: tooltipBase || 'Toggle automatic container restart'
+    tooltip: controlDisabledTooltip
   });
 
   const backupUpdatePayload = {
     enabled: autoBackupEnabled,
     disabled: !canControl,
-    tooltip: tooltipBase || 'Toggle automatic chain backup'
+    tooltip: backupDisabledTooltip
   };
   if (autoBackupHours !== null){
     backupUpdatePayload.hours = autoBackupHours;
@@ -1375,7 +1456,7 @@ function updateNodeContainerDetails(){
     if (labelEl){
       labelEl.textContent = isRunning ? 'Stop' : 'Start';
     }
-    toggleBtn.title = hostMode ? 'Docker controls unavailable on this host'
+    toggleBtn.title = controlsLocked ? lockReason : hostMode ? 'Docker controls unavailable on this host'
       : containerEntry ? (isRunning ? 'Stop container' : 'Start container')
       : 'Container status unavailable';
   }
@@ -1475,9 +1556,16 @@ function renderNodeControls(errorMsg){
   const containerName = activeNode && activeNode.container ? activeNode.container : '';
   const hasContainer = !!containerName;
   const containerAvailable = !!containerEntry;
-  const canControl = hasContainer && containerAvailable;
-  setNodeControlButtonsDisabled(!canControl);
-  const chainEnabled = serverAllowsChain && canControl;
+  const baseCanControl = hasContainer && containerAvailable;
+  const controlsLocked = !!nodeJobLockActive;
+  const effectiveCanControl = baseCanControl && !controlsLocked;
+  nodeControlState.containerControlsEnabled = !!effectiveCanControl;
+  setNodeControlButtonsDisabled(!effectiveCanControl, {
+    includeChain: false,
+    reason: controlsLocked ? (nodeJobLockReason || 'Operation in progress') : ''
+  });
+  setPrimaryControlsLocked(controlsLocked, nodeJobLockReason || '');
+  const chainEnabled = serverAllowsChain && baseCanControl;
   nodeControlState.chainEnabled = chainEnabled;
   renderChainControls();
   if (!nodeControlPendingMessage){
@@ -1612,6 +1700,23 @@ function renderChainControls(){
     (jobNodeId && jobNodeId === currentNodeId) ||
     (!jobNodeId && (!jobContainerName || !activeNodeContainer || jobContainerName === activeNodeContainer))
   );
+  const jobLocksControls = jobActiveOnThisNode && (jobType === 'backup' || jobType === 'restore');
+  if (jobLocksControls){
+    const lockMessage = jobType === 'restore' ? 'Restore in progress – controls locked' : 'Backup in progress – controls locked';
+    if (!nodeJobLockActive || nodeJobLockReason !== lockMessage){
+      nodeJobLockActive = true;
+      nodeJobLockReason = lockMessage;
+      setNodeControlButtonsDisabled(true, { includeChain:false, reason: lockMessage });
+      setPrimaryControlsLocked(true, lockMessage);
+    }
+  } else if (nodeJobLockActive){
+    nodeJobLockActive = false;
+    nodeJobLockReason = '';
+    const shouldDisable = !(nodeControlState && nodeControlState.containerControlsEnabled);
+    setNodeControlButtonsDisabled(shouldDisable, { includeChain:false });
+    updateNodeContainerDetails();
+    setPrimaryControlsLocked(false);
+  }
   const jobNodeMeta = jobNodeId ? (knownNodes || []).find(node => node && node.id === jobNodeId) : null;
   const jobNodeLabelRaw = jobNodeMeta ? (jobNodeMeta.label || '') : (jobDetails.node_label || '');
   const jobNodeContainerRaw = jobNodeMeta ? (jobNodeMeta.container || '') : jobContainerName;
@@ -1630,10 +1735,14 @@ function renderChainControls(){
     return jobNodeId || container || 'another node';
   })();
   const showProgressDetails = !jobActive || jobType !== 'restore' || jobActiveOnThisNode;
-  const jobDisplayMessage = showProgressDetails ? jobMessage : '';
+  const showBackupProgressDetails = !jobActive || jobType !== 'backup' || jobActiveOnThisNode;
+  const jobDisplayMessage = (jobType === 'backup' ? (showBackupProgressDetails ? jobMessage : '') : (jobType === 'restore' ? (showProgressDetails ? jobMessage : '') : jobMessage));
   if (jobActive){
     backupScanState = { message:'', ok:true };
-    let statusText = jobDisplayMessage || job.message || `Chain ${jobType || 'operation'} in progress…`;
+    let statusText = jobDisplayMessage || (showBackupProgressDetails || jobType !== 'backup' ? job.message : '') || `Chain ${jobType || 'operation'} in progress…`;
+    if (jobActive && jobType === 'backup' && !jobActiveOnThisNode){
+      statusText = `Backup running on ${jobNodeLabel}`;
+    }
     if (jobActive && jobType === 'restore' && !jobActiveOnThisNode){
       statusText = `Restore running on ${jobNodeLabel}`;
     }
@@ -1796,6 +1905,21 @@ async function refreshChainBackups(force = false){
     if (!activeJob && rawJob && rawJob.status && rawJob.message){
       backupScanState = { message: rawJob.message, ok: rawStatus !== 'error' };
       nodeControlState.renderedChainJobDigest = '';
+      const finalStatus = rawStatus;
+      if (['cancelled', 'success', 'succeeded', 'completed', 'idle'].includes(finalStatus)){
+        if (chainJobClearTimer){
+          clearTimeout(chainJobClearTimer);
+          chainJobClearTimer = null;
+        }
+        chainJobClearTimer = window.setTimeout(() => {
+          if (!isChainJobPollingActive()){
+            backupScanState = { message:'', ok:true };
+            _showDefaultBackupStatus();
+            setChainControlStatus('', true);
+          }
+          chainJobClearTimer = null;
+        }, 4000);
+      }
     }
     nodeControlState.chainBackupsLastFetched = Date.now();
     renderChainControls();
@@ -1899,6 +2023,32 @@ async function performNodeAction(action, options = {}){
   const isChainAction = action.startsWith('chain_');
   const isAutoRestartAction = action === 'auto_enable' || action === 'auto_disable';
   const isAutoBackupAction = action === 'auto_backup_enable' || action === 'auto_backup_disable';
+  const locksContainerDuringChain = action === 'chain_backup' || action === 'chain_restore';
+  let jobLockApplied = false;
+  const lockReason =
+    action === 'chain_restore'
+      ? 'Restore in progress \u2013 controls locked'
+      : 'Backup in progress \u2013 controls locked';
+  const applyContainerLock = () => {
+    if (jobLockApplied) return;
+    jobLockApplied = true;
+    nodeJobLockActive = true;
+    nodeJobLockReason = lockReason;
+    setNodeControlButtonsDisabled(true, { includeChain: false, reason: lockReason });
+    setPrimaryControlsLocked(true, lockReason);
+  };
+  const releaseContainerLock = () => {
+    if (!jobLockApplied) return;
+    if (nodeControlState && nodeControlState.chainJob && nodeControlState.chainJob.status === 'running') {
+      return;
+    }
+    jobLockApplied = false;
+    nodeJobLockActive = false;
+    nodeJobLockReason = '';
+    const shouldDisable = !(nodeControlState && nodeControlState.containerControlsEnabled);
+    setNodeControlButtonsDisabled(shouldDisable, { includeChain: false });
+    setPrimaryControlsLocked(false);
+  };
   const revertAutoRestartToggle = () => {
     if (!isAutoRestartAction) return;
     if (previousAutoEnabled === null) return;
@@ -1917,6 +2067,7 @@ async function performNodeAction(action, options = {}){
     revertAutoRestartToggle();
     revertAutoBackupToggle();
     statusSetter('Unsupported action', false);
+    releaseContainerLock();
     return;
   }
   const activeNode = getActiveNodeMeta();
@@ -1939,12 +2090,14 @@ async function performNodeAction(action, options = {}){
     revertAutoRestartToggle();
     revertAutoBackupToggle();
     statusSetter('Select a node with a container first', false);
+    releaseContainerLock();
     return;
   }
   if (!containerEntry && !hostMode && container && action !== 'chain_cancel'){
     revertAutoRestartToggle();
     revertAutoBackupToggle();
     statusSetter(`Container ${container} not available`, false);
+    releaseContainerLock();
     return;
   }
   const rawJob = nodeControlState.chainJob || null;
@@ -1962,6 +2115,7 @@ async function performNodeAction(action, options = {}){
     } else {
       statusSetter(`${jobLabel} already in progress`, false);
     }
+    releaseContainerLock();
     return;
   }
   const hoursInput = autoRestartUI.hoursInput;
@@ -1988,6 +2142,7 @@ async function performNodeAction(action, options = {}){
     if (!Number.isFinite(hoursVal) || hoursVal <= 0){
       revertAutoRestartToggle();
       setNodeControlStatus('Enter auto restart hours ≥ 1', false);
+      releaseContainerLock();
       return;
     }
     payload.hours = hoursVal;
@@ -2002,11 +2157,13 @@ async function performNodeAction(action, options = {}){
     if (!Number.isFinite(hoursVal) || hoursVal <= 0){
       revertAutoBackupToggle();
       setNodeControlStatus('Enter auto backup hours ≥ 1', false);
+      releaseContainerLock();
       return;
     }
     if (!Number.isFinite(maxVal) || maxVal <= 0){
       revertAutoBackupToggle();
       setNodeControlStatus('Enter max backups ≥ 1', false);
+      releaseContainerLock();
       return;
     }
     payload.backup_hours = hoursVal;
@@ -2022,6 +2179,7 @@ async function performNodeAction(action, options = {}){
   } else if (action === 'chain_restore'){
     if (!backupSelect || !backupSelect.value){
       setChainControlStatus('Select a backup to restore', true);
+      releaseContainerLock();
       return;
     }
     payload.backup = backupSelect.value;
@@ -2036,6 +2194,7 @@ async function performNodeAction(action, options = {}){
   } else if (action === 'chain_delete'){
     if (!backupSelect || !backupSelect.value){
       setChainControlStatus('Select a backup to delete', true);
+      releaseContainerLock();
       return;
     }
     payload.backup = backupSelect.value;
@@ -2061,6 +2220,9 @@ async function performNodeAction(action, options = {}){
     if (isChainAction){
       setChainControlButtonsDisabled(true);
     }
+    if (locksContainerDuringChain){
+      applyContainerLock();
+    }
     statusSetter(`${statusMessage}…`);
     const res = await fetch(withNodeParam('/api/control'), {
       method:'POST',
@@ -2083,6 +2245,7 @@ async function performNodeAction(action, options = {}){
   }catch(err){
     finalMessage = err && err.message ? err.message : 'Action failed';
     finalOk = false;
+    releaseContainerLock();
   }finally{
     if (isChainAction){
       chainControlPendingMessage = { text: finalMessage, ok: finalOk };
@@ -2108,6 +2271,9 @@ async function performNodeAction(action, options = {}){
     if (chainControlPendingMessage){
       setChainControlStatus(chainControlPendingMessage.text, chainControlPendingMessage.ok);
       chainControlPendingMessage = null;
+    }
+    if (!finalOk){
+      releaseContainerLock();
     }
     if (action === 'chain_restore'){
       try{ await refreshChainBackups(true); }catch(_){/* ignore */}

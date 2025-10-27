@@ -3324,7 +3324,7 @@ def _chain_job_finish(status: str, message: str, details=None):
             "status": status,
             "message": message,
             "ended": ended,
-            "details": details or _chain_job_state.get("details"),
+            "details": (details or {}) if isinstance(details, dict) else {},
         })
         _chain_job_context["thread"] = None
         _chain_job_context["process"] = None
@@ -3750,6 +3750,7 @@ def _chain_backup_task(container_name: str):
     details = {"container": container_name}
     status = "error"
     message = ''
+    restart_on_cancel = False
     try:
         _check_chain_job_cancelled()
         _ensure_backup_dir()
@@ -3770,6 +3771,7 @@ def _chain_backup_task(container_name: str):
         if total_bytes:
             progress_details["total"] = total_bytes
         _chain_job_progress(_format_backup_progress_message(dest_name, 0, 0.0, total_bytes), progress_details)
+        _check_chain_job_cancelled()
         parent = CHAIN_DATA_DIR.parent
         arcname = CHAIN_DATA_DIR.name
         proc = subprocess.Popen(
@@ -3779,6 +3781,7 @@ def _chain_backup_task(container_name: str):
             text=True
         )
         _chain_job_set_process(proc)
+        _check_chain_job_cancelled()
         stdout = ''
         stderr = ''
         try:
@@ -3859,6 +3862,7 @@ def _chain_backup_task(container_name: str):
         if dest_path:
             details.setdefault("path", dest_path.name)
         details["cancelled"] = True
+        restart_on_cancel = was_running
     except Exception as exc:
         message = str(exc)
         if dest_path and dest_path.exists():
@@ -3868,10 +3872,19 @@ def _chain_backup_task(container_name: str):
     finally:
         restart_error = None
         if was_running:
-            try:
-                _start_container_for_job(container_name)
-            except Exception as exc:
-                restart_error = str(exc)
+            if status == "cancelled" and restart_on_cancel:
+                def _restart_later(name):
+                    try:
+                        _start_container_for_job(name)
+                    except Exception:
+                        pass
+                threading.Thread(target=_restart_later, args=(container_name,), daemon=True).start()
+                details["restart_scheduled"] = True
+            else:
+                try:
+                    _start_container_for_job(container_name)
+                except Exception as exc:
+                    restart_error = str(exc)
         if restart_error:
             message = f"{message} (failed to restart container: {restart_error})"
             status = "error"
@@ -3932,6 +3945,7 @@ def _chain_restore_task(container_name: str, backup_name: str):
         if total_bytes:
             progress_details["total"] = total_bytes
         _chain_job_progress(_format_backup_progress_message(backup_name, 0, 0.0, total_bytes, verb="Restoring"), progress_details)
+        _check_chain_job_cancelled()
         proc = subprocess.Popen(
             ["tar", "-xzf", str(backup_path), "-C", str(parent)],
             stdout=subprocess.PIPE,
@@ -3939,6 +3953,7 @@ def _chain_restore_task(container_name: str, backup_name: str):
             text=True
         )
         _chain_job_set_process(proc)
+        _check_chain_job_cancelled()
         stdout = ''
         stderr = ''
         base_read = _read_process_read_bytes(proc) or 0
