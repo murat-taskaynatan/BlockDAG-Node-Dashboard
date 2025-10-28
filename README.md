@@ -1,4 +1,4 @@
-# BlockDAG Node Dashboard
+# BlockDAG | Node Dashboard
 
 A Flask-based monitoring dashboard for BlockDAG Network nodes. The UI surfaces node health, peers, RPC latency, and block activity, plus live charts for peers, latency, and block throughput.
 
@@ -65,4 +65,3 @@ Current stable release tag: `v1.4.1`
 git tag -a v1.x.x -m "Version 1.x.x"
 git push origin master --tags
 ```
-
