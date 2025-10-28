@@ -13,11 +13,6 @@ APP_START = time.time()
 app = Flask(__name__, template_folder="templates", static_folder="static")
 app.config["TEMPLATES_AUTO_RELOAD"] = True
 app.jinja_env.auto_reload = True
-
-try:
-    import psutil  # type: ignore
-except Exception:  # pragma: no cover - psutil optional
-    psutil = None
 _log_level_name = (os.getenv("BDAG_LOG_LEVEL", "INFO") or "INFO").strip().upper()
 _log_level = getattr(logging, _log_level_name, logging.INFO)
 app.logger.setLevel(_log_level)
@@ -114,9 +109,6 @@ ACTIVITY_JUMP_THRESHOLD = float(os.getenv("DASH_ACTIVITY_JUMP_THRESHOLD", "500")
 RATE_SMOOTH_WINDOW_SEC = float(os.getenv("DASH_RATE_SMOOTH_WINDOW_SEC", "20"))
 REMOTE_JUMP_FAILSAFE_HEIGHT = int(os.getenv("DASH_REMOTE_JUMP_FAILSAFE_HEIGHT", "1000000"))
 REMOTE_JUMP_FAILSAFE_FACTOR = float(os.getenv("DASH_REMOTE_JUMP_FAILSAFE_FACTOR", "8"))
-
-SYSTEM_METRIC_ROOT = Path(os.getenv("DASH_SYSTEM_METRIC_PATH", "/"))
-SYSTEM_METRIC_CACHE_SEC = max(1.0, float(os.getenv("DASH_SYSTEM_METRIC_CACHE_SEC", "5")))
 
 CHAIN_DATA_DIR = Path(os.getenv("BDAG_CHAIN_DATA_DIR", "/home/blockdag/blockdag-scripts/bin/bdag/data")).expanduser().resolve()
 CHAIN_BACKUP_DIR = Path(os.getenv("BDAG_CHAIN_BACKUP_DIR", os.path.expanduser("~/backups"))).expanduser().resolve()
@@ -4673,11 +4665,6 @@ def healthz():
 
 
 
-@app.route("/api/system/resources")
-def api_system_resources():
-    return jsonify(_get_host_resource_usage())
-
-
 @app.route("/node-manager")
 def node_manager_view():
     return render_template("node_manager.html", app_version=APP_VERSION, app_version_display=APP_VERSION_DISPLAY)
@@ -4995,140 +4982,6 @@ def peers_or_fb(peers):
     return p
 
 _RECENT_LOGS_CACHE = {}
-_SYSTEM_METRIC_CACHE = {"ts": 0.0, "data": None}
-
-
-def _read_meminfo_bytes():
-    info = {}
-    try:
-        with open("/proc/meminfo", "r", encoding="utf-8") as fh:
-            for line in fh:
-                parts = line.split(":", 1)
-                if len(parts) != 2:
-                    continue
-                key = parts[0].strip()
-                value_part = parts[1].strip()
-                value_str = value_part.split()[0]
-                try:
-                    info[key] = int(value_str) * 1024  # values reported in kB
-                except Exception:
-                    continue
-    except Exception:
-        return None
-    if not info:
-        return None
-    total = info.get("MemTotal")
-    available = info.get("MemAvailable")
-    if total is None:
-        return None
-    if available is None:
-        # Fallback approximation if MemAvailable missing
-        available = sum(filter(None, [info.get("MemFree"), info.get("Buffers"), info.get("Cached")]))
-    if available is None:
-        return None
-    used = max(total - available, 0)
-    percent = (used / total * 100.0) if total else None
-    return {
-        "total": float(total),
-        "available": float(available),
-        "used": float(used),
-        "percent": float(percent) if percent is not None else None,
-    }
-
-
-def _get_host_resource_usage():
-    now = time.time()
-    cached_ts = _SYSTEM_METRIC_CACHE.get("ts") or 0.0
-    cached_data = _SYSTEM_METRIC_CACHE.get("data")
-    if cached_data and (now - cached_ts) < SYSTEM_METRIC_CACHE_SEC:
-        return dict(cached_data)
-
-    cpu_count = os.cpu_count() or 1
-    payload = {
-        "timestamp": now,
-        "cpu_percent": None,
-        "cpu_load1": None,
-        "cpu_load5": None,
-        "cpu_load15": None,
-        "cpu_count": cpu_count,
-        "memory_total": None,
-        "memory_used": None,
-        "memory_available": None,
-        "memory_percent": None,
-        "disk_total": None,
-        "disk_used": None,
-        "disk_free": None,
-        "disk_percent": None,
-        "provider": "fallback",
-    }
-
-    if psutil is not None:
-        try:
-            payload["cpu_percent"] = float(psutil.cpu_percent(interval=None))
-            load1, load5, load15 = psutil.getloadavg() if hasattr(psutil, "getloadavg") else os.getloadavg()
-            payload.update({
-                "cpu_load1": float(load1),
-                "cpu_load5": float(load5),
-                "cpu_load15": float(load15),
-            })
-            mem = psutil.virtual_memory()
-            payload.update({
-                "memory_total": float(mem.total),
-                "memory_used": float(mem.used),
-                "memory_available": float(mem.available),
-                "memory_percent": float(mem.percent),
-            })
-            disk = psutil.disk_usage(str(SYSTEM_METRIC_ROOT))
-            payload.update({
-                "disk_total": float(disk.total),
-                "disk_used": float(disk.used),
-                "disk_free": float(disk.free),
-                "disk_percent": float(disk.percent),
-            })
-            payload["provider"] = "psutil"
-        except Exception:
-            pass
-
-    if payload["cpu_percent"] is None:
-        try:
-            load1, load5, load15 = os.getloadavg()
-            payload.update({
-                "cpu_load1": float(load1),
-                "cpu_load5": float(load5),
-                "cpu_load15": float(load15),
-            })
-            payload["cpu_percent"] = max(0.0, min(100.0, (load1 / max(cpu_count, 1)) * 100.0))
-        except Exception:
-            pass
-
-    if payload["memory_total"] is None:
-        meminfo = _read_meminfo_bytes()
-        if meminfo:
-            payload.update({
-                "memory_total": meminfo.get("total"),
-                "memory_used": meminfo.get("used"),
-                "memory_available": meminfo.get("available"),
-                "memory_percent": meminfo.get("percent"),
-            })
-
-    if payload["disk_total"] is None:
-        try:
-            usage = shutil.disk_usage(str(SYSTEM_METRIC_ROOT))
-            total = float(usage.total)
-            used = float(usage.used)
-            free = float(usage.free)
-            percent = (used / total * 100.0) if total else None
-            payload.update({
-                "disk_total": total,
-                "disk_used": used,
-                "disk_free": free,
-                "disk_percent": float(percent) if percent is not None else None,
-            })
-        except Exception:
-            pass
-
-    _SYSTEM_METRIC_CACHE.update({"ts": now, "data": dict(payload)})
-    return payload
 
 def _get_recent_logs(limit=50, container=None):
     try:
