@@ -19,7 +19,6 @@ A Flask-based monitoring dashboard for BlockDAG Network nodes. The UI surfaces n
 - Chart controls for sampling window and history length, with server-side buffering.
 - Dynamic Flask route `/api/status` and chart APIs powering the frontend.
 - Live log viewer with ANSI cleanup and auto-scroll to keep recent node activity visible.
-- Automatic container self-healing that restarts a node when 10 consecutive error log entries are detected (thresholds configurable via env vars).
 - Remote-height awareness that surfaces local vs remote deltas and ETA to full sync.
 - Mining state detection and health categorisation (steady, syncing, downloading, stalled, etc.).
 
