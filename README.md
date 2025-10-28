@@ -47,8 +47,7 @@ During installation the helper script `bdag_sidecar.py` is installed to `/usr/lo
 Alternatively, install directly from GitHub (no manual clone required):
 
 ```bash
-REPO_URL=https://github.com/murat-taskaynatan/BlockDAG-Node-Dashboard.git \
-./install_from_github.sh
+sudo curl -sSL https://raw.githubusercontent.com/murat-taskaynatan/BlockDAG-Node-Dashboard/main/install_from_github.sh | bash
 ```
 
 ## Repository Layout
