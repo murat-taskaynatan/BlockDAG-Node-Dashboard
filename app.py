@@ -102,13 +102,20 @@ STALL_THRESHOLD_MS = int(os.getenv("DASH_STALL_THRESHOLD_MS", "180000"))
 SYNC_RATE_THRESHOLD = float(os.getenv("DASH_SYNC_RATE_THRESHOLD", "0.3"))
 DOWNLOAD_RATE_THRESHOLD = float(os.getenv("DASH_DOWNLOAD_RATE_THRESHOLD", "1.0"))
 MINING_RATE_THRESHOLD = float(os.getenv("DASH_MINING_RATE_THRESHOLD", "0.1"))
-APP_VERSION = os.getenv("BDAG_DASH_VERSION", "v1.4.2").strip() or "v1.4.2"
+APP_VERSION = os.getenv("BDAG_DASH_VERSION", "v1.4.3").strip() or "v1.4.3"
 APP_VERSION_DISPLAY = APP_VERSION
-HEIGHT_JUMP_THRESHOLD = int(os.getenv("DASH_HEIGHT_JUMP_THRESHOLD", "500"))
+HEIGHT_JUMP_THRESHOLD = int(os.getenv("DASH_HEIGHT_JUMP_THRESHOLD", "500000"))
 ACTIVITY_JUMP_THRESHOLD = float(os.getenv("DASH_ACTIVITY_JUMP_THRESHOLD", "500"))
 RATE_SMOOTH_WINDOW_SEC = float(os.getenv("DASH_RATE_SMOOTH_WINDOW_SEC", "20"))
 REMOTE_JUMP_FAILSAFE_HEIGHT = int(os.getenv("DASH_REMOTE_JUMP_FAILSAFE_HEIGHT", "1000000"))
 REMOTE_JUMP_FAILSAFE_FACTOR = float(os.getenv("DASH_REMOTE_JUMP_FAILSAFE_FACTOR", "8"))
+
+ERROR_RESTART_ENABLED = os.getenv("DASH_ERROR_RESTART", "0") == "1"
+LOG_ERROR_THRESHOLD = max(1, int(os.getenv("DASH_LOG_ERROR_THRESHOLD", "10")))
+LOG_ERROR_CHECK_SEC = max(1.0, float(os.getenv("DASH_LOG_ERROR_CHECK_SEC", "15")))
+LOG_ERROR_RESTART_COOLDOWN_SEC = max(30.0, float(os.getenv("DASH_LOG_ERROR_RESTART_COOLDOWN_SEC", "300")))
+LOG_ERROR_TAIL = max(10, min(int(os.getenv("DASH_LOG_ERROR_TAIL", "80")), 200))
+LOG_ERROR_PATTERN = re.compile(r"\\berror\\b", re.IGNORECASE)
 
 CHAIN_DATA_DIR = Path(os.getenv("BDAG_CHAIN_DATA_DIR", "/home/blockdag/blockdag-scripts/bin/bdag/data")).expanduser().resolve()
 CHAIN_BACKUP_DIR = Path(os.getenv("BDAG_CHAIN_BACKUP_DIR", os.path.expanduser("~/backups"))).expanduser().resolve()
@@ -2791,6 +2798,11 @@ def sampler(ctx: NodeContext):
                     app.logger.debug("sampler error for %s: %s", ctx.id, exc)
                 except Exception:
                     pass
+            if ERROR_RESTART_ENABLED and ALLOW_DOCKER and ctx.container:
+                try:
+                    _auto_restart_on_log_errors(ctx)
+                except Exception:
+                    pass
         time.sleep(max(1, SAMPLE_SEC))
 
 
@@ -4982,6 +4994,84 @@ def peers_or_fb(peers):
     return p
 
 _RECENT_LOGS_CACHE = {}
+LOG_ERROR_STATE: dict[str, dict[str, float | int]] = {}
+
+
+def _auto_restart_on_log_errors(ctx: NodeContext) -> None:
+    if not ERROR_RESTART_ENABLED:
+        return
+    if not (ALLOW_DOCKER and DOCKER_BIN and ctx and ctx.container):
+        return
+    container = ctx.container
+    state = LOG_ERROR_STATE.setdefault(container, {
+        "last_check": 0.0,
+        "last_restart": 0.0,
+        "streak": 0,
+        "auto_restart_enabled": False,
+        "auto_restart_active": False,
+        "last_auto_probe": 0.0,
+    })
+    now = time.time()
+    if now - float(state.get("last_check", 0.0)) < LOG_ERROR_CHECK_SEC:
+        return
+    state["last_check"] = now
+
+    auto_enabled = False
+    try:
+        last_probe = float(state.get("last_auto_probe", 0.0))
+        if now - last_probe >= LOG_ERROR_CHECK_SEC:
+            info = _get_auto_restart_status(container)
+            state["auto_restart_enabled"] = bool(info and info.get("enabled"))
+            state["auto_restart_active"] = bool(info and info.get("active"))
+            state["last_auto_probe"] = now
+    except Exception:
+        pass
+    auto_enabled = bool(state.get("auto_restart_enabled")) or bool(state.get("auto_restart_active"))
+    if auto_enabled:
+        state["streak"] = 0
+        return
+
+    try:
+        lines = _get_recent_logs(LOG_ERROR_TAIL, container)
+    except Exception:
+        lines = []
+    if not lines:
+        state["streak"] = 0
+        return
+    streak = 0
+    for line in reversed(lines):
+        try:
+            text = line.strip()
+        except Exception:
+            text = str(line)
+        if LOG_ERROR_PATTERN.search(text):
+            streak += 1
+        else:
+            break
+    state["streak"] = streak
+    if streak < LOG_ERROR_THRESHOLD:
+        return
+    last_restart = float(state.get("last_restart", 0.0))
+    if now - last_restart < LOG_ERROR_RESTART_COOLDOWN_SEC:
+        return
+    try:
+        app.logger.warning(
+            "Auto-restarting container %s after %s consecutive error log lines", container, streak
+        )
+    except Exception:
+        pass
+    try:
+        restarted = _restart_container_for_job(container)
+    except Exception as exc:
+        state["last_restart"] = time.time()
+        try:
+            app.logger.error("Auto restart failed for %s: %s", container, exc)
+        except Exception:
+            pass
+        return
+    state["last_restart"] = time.time()
+    if restarted:
+        state["streak"] = 0
 
 def _get_recent_logs(limit=50, container=None):
     try:
