@@ -65,3 +65,5 @@ Current stable release tag: `v1.4.1`
 git tag -a v1.x.x -m "Version 1.x.x"
 git push origin master --tags
 ```
+## License
+This project is released under the MIT License. See `LICENSE` for details.
