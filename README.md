@@ -61,7 +61,7 @@ sudo curl -sSL https://raw.githubusercontent.com/murat-taskaynatan/BlockDAG-Node
 
 ## Releasing
 
-Current stable release tag: `v1.4.1`
+Current stable release tag: `v1.4.2`
 
 ```bash
 git tag -a v1.x.x -m "Version 1.x.x"
