@@ -161,6 +161,7 @@
 #chartControls select{appearance:none;background:rgba(255,255,255,.08);border:1px solid #3a4a7a;border-radius:.6rem;color:inherit;padding:.3rem .6rem;min-width:108px}
 #chartControls button{padding:.32rem .7rem;font-size:12px;line-height:1}
 #chartControls .chart-status{margin-left:auto;font-size:11px;line-height:1.3;color:var(--muted);opacity:.8;min-width:0}
+.section-title{font-size:12px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.08em;margin-bottom:6px}
 #versionBadge{position:fixed;bottom:16px;right:18px;top:auto;left:auto;z-index:1200;font-size:11px;color:var(--muted);background:rgba(0,0,0,.35);padding:4px 10px;border-radius:999px;letter-spacing:.08em;text-transform:none;opacity:.8;pointer-events:none;backdrop-filter:blur(6px)}
   .log-output{background:rgba(33,24,0,.45);border-radius:12px;padding:12px;margin:0;font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono","Courier New",monospace;font-size:12px;line-height:1.4;white-space:pre-wrap;word-break:break-word;max-height:252px;overflow-y:auto;border:1px solid rgba(255,167,38,.35);color:#ffb74d;scrollbar-width:thin;scrollbar-color:#20263d rgba(255,255,255,0.16);}
   .log-output::-webkit-scrollbar{width:8px;height:8px}
@@ -284,10 +285,13 @@
           <div class="kv"><div class="k">processed (total)</div><div class="v" id="vProcessed">—</div></div>
           <div class="kv"><div class="k">sealed (total)</div><div class="v" id="vSealed">—</div></div>
         </div>
-        <div class="kvs system-stats activity-system-stats">
-          <div class="kv"><div class="k">cpu usage</div><div class="v" id="vHostCpu">—</div></div>
-          <div class="kv"><div class="k">memory</div><div class="v" id="vHostMemory">—</div></div>
-          <div class="kv"><div class="k">disk</div><div class="v" id="vHostDisk">—</div></div>
+        <div>
+          <div class="section-title">System Resources</div>
+          <div class="kvs system-stats activity-system-stats">
+            <div class="kv"><div class="k">cpu usage</div><div class="v" id="vHostCpu">—</div></div>
+            <div class="kv"><div class="k">memory</div><div class="v" id="vHostMemory">—</div></div>
+            <div class="kv"><div class="k">disk</div><div class="v" id="vHostDisk">—</div></div>
+          </div>
         </div>
       </div>
     </div>
