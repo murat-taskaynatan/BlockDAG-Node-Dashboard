@@ -152,14 +152,15 @@
 #nodeControlStatus{min-height:1.2em;opacity:0;transition:opacity .2s ease}
 #nodeContainerDetails{opacity:.8;text-align:right}
 .chart-status{min-width:120px;display:inline-block;opacity:1}
-  .activity-head{display:flex;flex-wrap:wrap;gap:16px;align-items:flex-start;margin-bottom:8px}
-  .activity-head-col{flex:1 1 320px}
-  .activity-head-col--controls{flex:1 1 280px}
-  .activity-head .title{margin-bottom:0}
-  .activity-body{display:flex;flex-wrap:wrap;gap:16px;align-items:flex-start;margin-top:0}
-.activity-kvs{flex:1 1 320px;display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:8px}
-.activity-controls{flex:1 1 280px}
-.activity-controls .node-ctrls{margin-top:0}
+  .activity-body{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:16px;align-items:flex-start;margin-top:0}
+.activity-kvs{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:8px}
+.activity-system-stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:8px}
+#chartControls{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:14px}
+#chartControls label{display:flex;align-items:center;gap:6px;font-size:11px;text-transform:uppercase;letter-spacing:.06em}
+#chartControls label span{opacity:.7}
+#chartControls select{appearance:none;background:rgba(255,255,255,.08);border:1px solid #3a4a7a;border-radius:.6rem;color:inherit;padding:.3rem .6rem;min-width:108px}
+#chartControls button{padding:.32rem .7rem;font-size:12px;line-height:1}
+#chartControls .chart-status{margin-left:auto;font-size:11px;line-height:1.3;color:var(--muted);opacity:.8;min-width:0}
 #versionBadge{position:fixed;bottom:16px;right:18px;top:auto;left:auto;z-index:1200;font-size:11px;color:var(--muted);background:rgba(0,0,0,.35);padding:4px 10px;border-radius:999px;letter-spacing:.08em;text-transform:none;opacity:.8;pointer-events:none;backdrop-filter:blur(6px)}
   .log-output{background:rgba(33,24,0,.45);border-radius:12px;padding:12px;margin:0;font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono","Courier New",monospace;font-size:12px;line-height:1.4;white-space:pre-wrap;word-break:break-word;max-height:252px;overflow-y:auto;border:1px solid rgba(255,167,38,.35);color:#ffb74d;scrollbar-width:thin;scrollbar-color:#20263d rgba(255,255,255,0.16);}
   .log-output::-webkit-scrollbar{width:8px;height:8px}
@@ -197,15 +198,6 @@
         <div class="kv"><div class="k">rpc latency (ms)</div><div class="v" id="vLat">—</div></div>
         <div class="kv"><div class="k">last seen</div><div class="v" id="vLast">—</div></div>
         <div class="kv"><div class="k">uptime</div><div class="v" id="vUptime">—</div></div>
-      </div>
-    </div>
-
-    <div class="card">
-      <div class="title">System Resources</div>
-      <div class="kvs system-stats">
-        <div class="kv"><div class="k">cpu usage</div><div class="v" id="vHostCpu">—</div></div>
-        <div class="kv"><div class="k">memory</div><div class="v" id="vHostMemory">—</div></div>
-        <div class="kv"><div class="k">disk</div><div class="v" id="vHostDisk">—</div></div>
       </div>
     </div>
 
@@ -285,52 +277,48 @@
 
     <!-- Activity Totals -->
     <div class="card">
-      <div class="activity-head">
-        <div class="activity-head-col">
-          <div class="title">Block Activity</div>
-        </div>
-        <div class="activity-head-col activity-head-col--controls">
-          <div class="title">Chart Controls</div>
-        </div>
-      </div>
+      <div class="title">Block Activity</div>
       <div class="activity-body">
         <div class="kvs activity-kvs">
           <div class="kv"><div class="k">mined (total)</div><div class="v" id="vMined">—</div></div>
           <div class="kv"><div class="k">processed (total)</div><div class="v" id="vProcessed">—</div></div>
           <div class="kv"><div class="k">sealed (total)</div><div class="v" id="vSealed">—</div></div>
         </div>
-        <div class="activity-controls">
-          <div class="node-ctrls" id="chartControls">
-            <label>
-              <span>Window (min)</span>
-              <select id="chartWindowMinutes">
-                <option value="1">1 min</option>
-                <option value="5">5 min</option>
-                <option value="10">10 min</option>
-                <option value="20" selected>20 min</option>
-                <option value="30">30 min</option>
-                <option value="60">60 min</option>
-              </select>
-            </label>
-            <label>
-              <span>History Points</span>
-              <select id="chartHistoryPoints">
-                <option value="60">60 pts</option>
-                <option value="120">120 pts</option>
-                <option value="240" selected>240 pts</option>
-                <option value="360">360 pts</option>
-                <option value="480">480 pts</option>
-              </select>
-            </label>
-            <button class="btn" id="btnApplyChartSettings">Apply</button>
-            <span class="sp chart-status" id="chartStatus"></span>
-          </div>
+        <div class="kvs system-stats activity-system-stats">
+          <div class="kv"><div class="k">cpu usage</div><div class="v" id="vHostCpu">—</div></div>
+          <div class="kv"><div class="k">memory</div><div class="v" id="vHostMemory">—</div></div>
+          <div class="kv"><div class="k">disk</div><div class="v" id="vHostDisk">—</div></div>
         </div>
       </div>
     </div>
 
     <!-- Charts -->
-    <div class="card">
+    <div class="card charts-card">
+      <div class="chart-controls-bar" id="chartControls">
+        <label>
+          <span>Window</span>
+          <select id="chartWindowMinutes">
+            <option value="1">1 min</option>
+            <option value="5">5 min</option>
+            <option value="10">10 min</option>
+            <option value="20" selected>20 min</option>
+            <option value="30">30 min</option>
+            <option value="60">60 min</option>
+          </select>
+        </label>
+        <label>
+          <span>History</span>
+          <select id="chartHistoryPoints">
+            <option value="60">60 pts</option>
+            <option value="120">120 pts</option>
+            <option value="240" selected>240 pts</option>
+            <option value="360">360 pts</option>
+            <option value="480">480 pts</option>
+          </select>
+        </label>
+        <button class="btn" id="btnApplyChartSettings">Apply</button>
+        <span class="chart-status" id="chartStatus"></span>
+      </div>
       <div class="grid">
         <div><canvas id="heightChart"></canvas></div>
         <div><canvas id="peersChart"></canvas></div>
