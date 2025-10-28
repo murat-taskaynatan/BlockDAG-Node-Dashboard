@@ -13,6 +13,7 @@
   .grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;margin-top:16px}
 .kvs{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:8px;margin-top:8px}
 .kvs.node-stats{display:grid;grid-template-columns:repeat(8,minmax(0,1fr));gap:8px}
+.kvs.system-stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:8px;margin-top:8px}
   .kv{background:rgba(255,255,255,.04);border-radius:12px;padding:10px}
   .kv .k{color:var(--muted);font-size:12px}
   .kv .v{font-size:18px;margin-top:4px}
@@ -196,6 +197,15 @@
         <div class="kv"><div class="k">rpc latency (ms)</div><div class="v" id="vLat">—</div></div>
         <div class="kv"><div class="k">last seen</div><div class="v" id="vLast">—</div></div>
         <div class="kv"><div class="k">uptime</div><div class="v" id="vUptime">—</div></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="title">System Resources</div>
+      <div class="kvs system-stats">
+        <div class="kv"><div class="k">cpu usage</div><div class="v" id="vHostCpu">—</div></div>
+        <div class="kv"><div class="k">memory</div><div class="v" id="vHostMemory">—</div></div>
+        <div class="kv"><div class="k">disk</div><div class="v" id="vHostDisk">—</div></div>
       </div>
     </div>
 
@@ -472,6 +482,12 @@ function formatBytes(bytes){
   }
   const digits = value >= 100 ? 0 : value >= 10 ? 1 : 2;
   return `${value.toFixed(digits)} ${units[unitIndex]}`;
+}
+
+function formatPercent(value, digits = 1){
+  const num = Number(value);
+  if (!Number.isFinite(num)) return '';
+  return `${num.toFixed(digits)}%`;
 }
 
 function formatTimestamp(ts){
@@ -2698,6 +2714,93 @@ async function refreshLogs(){
   }
 }
 
+async function refreshSystemResources(){
+  const cpuEl = document.getElementById('vHostCpu');
+  const memEl = document.getElementById('vHostMemory');
+  const diskEl = document.getElementById('vHostDisk');
+  if (!cpuEl && !memEl && !diskEl){
+    return;
+  }
+  const reset = () => {
+    if (cpuEl){ cpuEl.textContent = '—'; cpuEl.removeAttribute('title'); }
+    if (memEl){ memEl.textContent = '—'; memEl.removeAttribute('title'); }
+    if (diskEl){ diskEl.textContent = '—'; diskEl.removeAttribute('title'); }
+  };
+  try{
+    const res = await fetch('/api/system/resources', { cache:'no-store' });
+    if (!res.ok){ throw new Error(res.status || 'system resource response not ok'); }
+    const data = await res.json();
+    if (cpuEl){
+      const cpuPct = Number(data.cpu_percent);
+      const load1 = Number(data.cpu_load1);
+      const load5 = Number(data.cpu_load5);
+      const load15 = Number(data.cpu_load15);
+      const parts = [];
+      if (Number.isFinite(cpuPct)){ parts.push(formatPercent(cpuPct)); }
+      if (parts.length === 0 && Number.isFinite(load1)){
+        parts.push(`load ${load1.toFixed(2)}`);
+      }
+      cpuEl.textContent = parts.length ? parts.join(' · ') : '—';
+      const loads = [];
+      if (Number.isFinite(load1)){ loads.push(`1m ${load1.toFixed(2)}`); }
+      if (Number.isFinite(load5)){ loads.push(`5m ${load5.toFixed(2)}`); }
+      if (Number.isFinite(load15)){ loads.push(`15m ${load15.toFixed(2)}`); }
+      if (loads.length){ cpuEl.title = `Load averages: ${loads.join(', ')}`; }
+      else { cpuEl.removeAttribute('title'); }
+    }
+    if (memEl){
+      const total = Number(data.memory_total);
+      const used = Number(data.memory_used);
+      const available = Number(data.memory_available);
+      const percent = Number(data.memory_percent);
+      if (Number.isFinite(total) && total > 0 && Number.isFinite(used)){
+        const usedText = formatBytes(used) || '—';
+        const totalText = formatBytes(total) || '—';
+        const percentText = Number.isFinite(percent) ? formatPercent(percent) : '';
+        let label = `${usedText} / ${totalText}`;
+        if (percentText){ label += ` (${percentText})`; }
+        memEl.textContent = label;
+        if (Number.isFinite(available)){
+          const availText = formatBytes(available) || '';
+          if (availText){ memEl.title = `Available ${availText}`; }
+          else { memEl.removeAttribute('title'); }
+        } else {
+          memEl.removeAttribute('title');
+        }
+      } else {
+        memEl.textContent = '—';
+        memEl.removeAttribute('title');
+      }
+    }
+    if (diskEl){
+      const total = Number(data.disk_total);
+      const used = Number(data.disk_used);
+      const free = Number(data.disk_free);
+      const percent = Number(data.disk_percent);
+      if (Number.isFinite(total) && total > 0 && Number.isFinite(used)){
+        const usedText = formatBytes(used) || '—';
+        const totalText = formatBytes(total) || '—';
+        const percentText = Number.isFinite(percent) ? formatPercent(percent) : '';
+        let label = `${usedText} / ${totalText}`;
+        if (percentText){ label += ` (${percentText})`; }
+        diskEl.textContent = label;
+        if (Number.isFinite(free)){
+          const freeText = formatBytes(free) || '';
+          if (freeText){ diskEl.title = `Free ${freeText}`; }
+          else { diskEl.removeAttribute('title'); }
+        } else {
+          diskEl.removeAttribute('title');
+        }
+      } else {
+        diskEl.textContent = '—';
+        diskEl.removeAttribute('title');
+      }
+    }
+  } catch(err){
+    reset();
+  }
+}
+
 async function refreshCharts(){
   if (!window.Chart) return;
   const targetNode = currentNodeId;
@@ -2819,6 +2922,7 @@ async function refreshCharts(){
 }
 async function tick(){
   await refreshStatus();
+  await refreshSystemResources();
   await refreshCharts();
   await refreshNodeControls();
 }
