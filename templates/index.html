@@ -3137,13 +3137,11 @@ function wireControls(){
   const historySelect = document.getElementById('chartHistoryPoints');
   if (windowSelect){
     windowSelect.addEventListener('change', () => {
-      setWindowStatus('Updating…', true);
       applyChartSettings();
     });
   }
   if (historySelect){
     historySelect.addEventListener('change', () => {
-      setHistoryStatus('Updating…', true);
       applyChartSettings();
     });
   }
