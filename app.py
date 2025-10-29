@@ -121,6 +121,21 @@ LOG_ERROR_CHECK_SEC = max(1.0, float(os.getenv("DASH_LOG_ERROR_CHECK_SEC", "15")
 LOG_ERROR_RESTART_COOLDOWN_SEC = max(30.0, float(os.getenv("DASH_LOG_ERROR_RESTART_COOLDOWN_SEC", "300")))
 LOG_ERROR_TAIL = max(10, min(int(os.getenv("DASH_LOG_ERROR_TAIL", "80")), 200))
 LOG_ERROR_PATTERN = re.compile(r"\\berror\\b", re.IGNORECASE)
+LIVENESS_FAILSAFE_ENABLED = os.getenv("DASH_LIVENESS_FAILSAFE", "1").strip().lower() not in {"0", "false", "off", "no"}
+LIVENESS_FAILSAFE_COOLDOWN_SEC = max(60.0, float(os.getenv("DASH_LIVENESS_FAILSAFE_COOLDOWN_SEC", "900")))
+_liveness_custom = [
+    part.strip().lower()
+    for part in (os.getenv("DASH_LIVENESS_FAILSAFE_PATTERNS") or "").split(",")
+    if part.strip()
+]
+if _liveness_custom:
+    LIVENESS_FAILSAFE_SUBSTRINGS = tuple({*_liveness_custom})
+else:
+    LIVENESS_FAILSAFE_SUBSTRINGS = (
+        "liveness probe exceeded timeout",
+        "liveness probe failed",
+        "forcing shutdown url=http://127.0.0.1:6061/healthz",
+    )
 
 SYSTEM_METRIC_ROOT = Path(os.getenv("DASH_SYSTEM_METRIC_PATH", "/").strip() or "/")
 SYSTEM_METRIC_CACHE_SEC = max(1.0, float(os.getenv("DASH_SYSTEM_METRIC_CACHE_SEC", "5")))
@@ -4349,6 +4364,53 @@ def trigger_chain_restore(container_name: str, backup_name: str, ctx: NodeContex
         thread.start()
     return True, "Chain restore started"
 
+def _failsafe_restore_latest_backup(ctx: NodeContext) -> bool:
+    try:
+        with use_node_context(ctx):
+            backups = list_chain_backups()
+    except Exception as exc:
+        try:
+            app.logger.error("Failsafe restore unable to enumerate backups for %s: %s", ctx.id, exc)
+        except Exception:
+            pass
+        return False
+    latest_backup = next((item.get("name") for item in backups if item and item.get("name")), None)
+    if not latest_backup:
+        try:
+            app.logger.warning("Failsafe restore skipped for %s: no backups available", ctx.id)
+        except Exception:
+            pass
+        return False
+    if _chain_job_state.get("active"):
+        try:
+            app.logger.warning("Failsafe restore skipped for %s: chain job already active (%s)", ctx.id, _chain_job_state.get("type"))
+        except Exception:
+            pass
+        return False
+    ok, msg = trigger_chain_restore(ctx.container, latest_backup, ctx)
+    if ok:
+        try:
+            app.logger.warning("Failsafe restore triggered for %s using backup %s", ctx.id, latest_backup)
+        except Exception:
+            pass
+    else:
+        try:
+            app.logger.error("Failsafe restore failed for %s: %s", ctx.id, msg)
+        except Exception:
+            pass
+    return ok
+
+def _schedule_failsafe_restore(ctx: NodeContext, state: dict):
+    def runner(state_ref: dict):
+        try:
+            success = _failsafe_restore_latest_backup(ctx)
+            if not success:
+                # allow future attempts sooner if restore fails
+                state_ref["failsafe_last"] = 0.0
+        finally:
+            state_ref["failsafe_active"] = False
+    threading.Thread(target=runner, args=(state,), name=f"failsafe-restore-{ctx.id}", daemon=True).start()
+
 
 def trigger_chain_delete(container_name: str, backup_name: str, ctx: NodeContext):
     target_container = container_name or ctx.container
@@ -5156,6 +5218,8 @@ def _auto_restart_on_log_errors(ctx: NodeContext) -> None:
         "auto_restart_enabled": False,
         "auto_restart_active": False,
         "last_auto_probe": 0.0,
+        "failsafe_last": 0.0,
+        "failsafe_active": False,
     })
     now = time.time()
     if now - float(state.get("last_check", 0.0)) < LOG_ERROR_CHECK_SEC:
@@ -5181,6 +5245,34 @@ def _auto_restart_on_log_errors(ctx: NodeContext) -> None:
         lines = _get_recent_logs(LOG_ERROR_TAIL, container)
     except Exception:
         lines = []
+    if LIVENESS_FAILSAFE_ENABLED and ctx.container:
+        triggered = False
+        for raw_line in reversed(lines or []):
+            try:
+                text_lower = raw_line.strip().lower()
+            except Exception:
+                text_lower = str(raw_line).lower()
+            if any(pattern in text_lower for pattern in LIVENESS_FAILSAFE_SUBSTRINGS):
+                last_restore = float(state.get("failsafe_last", 0.0))
+                if state.get("failsafe_active"):
+                    triggered = False
+                elif now - last_restore < LIVENESS_FAILSAFE_COOLDOWN_SEC:
+                    triggered = False
+                else:
+                    state["failsafe_last"] = now
+                    state["failsafe_active"] = True
+                    state["streak"] = 0
+                    state["last_restart"] = now
+                    try:
+                        app.logger.warning("Failsafe restore scheduled for %s after liveness probe failure", container)
+                    except Exception:
+                        pass
+                    _schedule_failsafe_restore(ctx, state)
+                    triggered = True
+                break
+        if triggered:
+            return
+
     if not lines:
         state["streak"] = 0
         return
