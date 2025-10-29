@@ -152,7 +152,10 @@
 #nodeControlStatus{min-height:1.2em;opacity:0;transition:opacity .2s ease}
 #nodeContainerDetails{opacity:.8;text-align:right}
 .chart-status{min-width:120px;display:inline-block;opacity:1}
-  .activity-body{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:16px;align-items:flex-start;margin-top:0}
+  .activity-body{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));grid-auto-rows:1fr;gap:16px;align-items:stretch;margin-top:0}
+.activity-section{display:flex;flex-direction:column;height:100%}
+.activity-section__title{font-size:20px;font-weight:600;margin-bottom:10px;display:flex;align-items:center;gap:10px}
+.activity-section__content{flex:1}
 .activity-kvs{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:8px}
 .activity-system-stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:8px}
 #chartControls{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:14px}
@@ -161,7 +164,7 @@
 #chartControls select{appearance:none;background:rgba(255,255,255,.08);border:1px solid #3a4a7a;border-radius:.6rem;color:inherit;padding:.3rem .6rem;min-width:108px}
 #chartControls button{padding:.32rem .7rem;font-size:12px;line-height:1}
 #chartControls .chart-status{margin-left:auto;font-size:11px;line-height:1.3;color:var(--muted);opacity:.8;min-width:0}
-.section-title{font-size:12px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.08em;margin-bottom:6px}
+.section-title{font-size:20px;font-weight:600;color:inherit;text-transform:none;letter-spacing:normal;margin-bottom:10px}
 #versionBadge{position:fixed;bottom:16px;right:18px;top:auto;left:auto;z-index:1200;font-size:11px;color:var(--muted);background:rgba(0,0,0,.35);padding:4px 10px;border-radius:999px;letter-spacing:.08em;text-transform:none;opacity:.8;pointer-events:none;backdrop-filter:blur(6px)}
   .log-output{background:rgba(33,24,0,.45);border-radius:12px;padding:12px;margin:0;font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono","Courier New",monospace;font-size:12px;line-height:1.4;white-space:pre-wrap;word-break:break-word;max-height:252px;overflow-y:auto;border:1px solid rgba(255,167,38,.35);color:#ffb74d;scrollbar-width:thin;scrollbar-color:#20263d rgba(255,255,255,0.16);}
   .log-output::-webkit-scrollbar{width:8px;height:8px}
@@ -277,17 +280,19 @@
     </div>
 
     <!-- Activity Totals -->
-    <div class="card">
-      <div class="title">Block Activity</div>
+    <div class="card activity-card">
       <div class="activity-body">
-        <div class="kvs activity-kvs">
+        <div class="activity-section activity-section--totals">
+          <div class="activity-section__title">Block Activity</div>
+          <div class="activity-section__content kvs activity-kvs">
           <div class="kv"><div class="k">mined (total)</div><div class="v" id="vMined">—</div></div>
           <div class="kv"><div class="k">processed (total)</div><div class="v" id="vProcessed">—</div></div>
           <div class="kv"><div class="k">sealed (total)</div><div class="v" id="vSealed">—</div></div>
+          </div>
         </div>
-        <div>
-          <div class="section-title">System Resources</div>
-          <div class="kvs system-stats activity-system-stats">
+        <div class="activity-section activity-section--resources">
+          <div class="activity-section__title">System Resources</div>
+          <div class="activity-section__content kvs system-stats activity-system-stats">
             <div class="kv"><div class="k">cpu usage</div><div class="v" id="vHostCpu">—</div></div>
             <div class="kv"><div class="k">memory</div><div class="v" id="vHostMemory">—</div></div>
             <div class="kv"><div class="k">disk</div><div class="v" id="vHostDisk">—</div></div>
@@ -2741,52 +2746,14 @@ async function refreshSystemResources(){
       else { cpuEl.removeAttribute('title'); }
     }
     if (memEl){
-      const total = Number(data.memory_total);
-      const used = Number(data.memory_used);
-      const available = Number(data.memory_available);
       const percent = Number(data.memory_percent);
-      if (Number.isFinite(total) && total > 0 && Number.isFinite(used)){
-        const usedText = formatBytes(used) || '—';
-        const totalText = formatBytes(total) || '—';
-        const percentText = Number.isFinite(percent) ? formatPercent(percent) : '';
-        let label = `${usedText} / ${totalText}`;
-        if (percentText){ label += ` (${percentText})`; }
-        memEl.textContent = label;
-        if (Number.isFinite(available)){
-          const availText = formatBytes(available) || '';
-          if (availText){ memEl.title = `Available ${availText}`; }
-          else { memEl.removeAttribute('title'); }
-        } else {
-          memEl.removeAttribute('title');
-        }
-      } else {
-        memEl.textContent = '—';
-        memEl.removeAttribute('title');
-      }
+      memEl.textContent = Number.isFinite(percent) ? formatPercent(percent) : '—';
+      memEl.removeAttribute('title');
     }
     if (diskEl){
-      const total = Number(data.disk_total);
-      const used = Number(data.disk_used);
-      const free = Number(data.disk_free);
       const percent = Number(data.disk_percent);
-      if (Number.isFinite(total) && total > 0 && Number.isFinite(used)){
-        const usedText = formatBytes(used) || '—';
-        const totalText = formatBytes(total) || '—';
-        const percentText = Number.isFinite(percent) ? formatPercent(percent) : '';
-        let label = `${usedText} / ${totalText}`;
-        if (percentText){ label += ` (${percentText})`; }
-        diskEl.textContent = label;
-        if (Number.isFinite(free)){
-          const freeText = formatBytes(free) || '';
-          if (freeText){ diskEl.title = `Free ${freeText}`; }
-          else { diskEl.removeAttribute('title'); }
-        } else {
-          diskEl.removeAttribute('title');
-        }
-      } else {
-        diskEl.textContent = '—';
-        diskEl.removeAttribute('title');
-      }
+      diskEl.textContent = Number.isFinite(percent) ? formatPercent(percent) : '—';
+      diskEl.removeAttribute('title');
     }
   } catch(err){
     reset();
