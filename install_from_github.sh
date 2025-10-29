@@ -202,7 +202,7 @@ pip install --upgrade pip >/dev/null
 if [[ -f "$INSTALL_DIR/requirements.txt" ]]; then
   pip install -r "$INSTALL_DIR/requirements.txt"
 else
-  pip install flask requests waitress
+  pip install flask requests waitress psutil
 fi
 deactivate
 
