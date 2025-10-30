@@ -121,7 +121,8 @@ LOG_ERROR_CHECK_SEC = max(1.0, float(os.getenv("DASH_LOG_ERROR_CHECK_SEC", "15")
 LOG_ERROR_RESTART_COOLDOWN_SEC = max(30.0, float(os.getenv("DASH_LOG_ERROR_RESTART_COOLDOWN_SEC", "300")))
 LOG_ERROR_TAIL = max(10, min(int(os.getenv("DASH_LOG_ERROR_TAIL", "80")), 200))
 LOG_ERROR_PATTERN = re.compile(r"\\berror\\b", re.IGNORECASE)
-LIVENESS_FAILSAFE_ENABLED = os.getenv("DASH_LIVENESS_FAILSAFE", "0").strip().lower() not in {"0", "false", "off", "no"}
+# Force-disable liveness recovery on remote deployments.
+LIVENESS_FAILSAFE_ENABLED = False
 LIVENESS_FAILSAFE_COOLDOWN_SEC = max(60.0, float(os.getenv("DASH_LIVENESS_FAILSAFE_COOLDOWN_SEC", "900")))
 _liveness_custom = [
     part.strip().lower()
