@@ -121,7 +121,7 @@ LOG_ERROR_CHECK_SEC = max(1.0, float(os.getenv("DASH_LOG_ERROR_CHECK_SEC", "15")
 LOG_ERROR_RESTART_COOLDOWN_SEC = max(30.0, float(os.getenv("DASH_LOG_ERROR_RESTART_COOLDOWN_SEC", "300")))
 LOG_ERROR_TAIL = max(10, min(int(os.getenv("DASH_LOG_ERROR_TAIL", "80")), 200))
 LOG_ERROR_PATTERN = re.compile(r"\\berror\\b", re.IGNORECASE)
-LIVENESS_FAILSAFE_ENABLED = os.getenv("DASH_LIVENESS_FAILSAFE", "1").strip().lower() not in {"0", "false", "off", "no"}
+LIVENESS_FAILSAFE_ENABLED = os.getenv("DASH_LIVENESS_FAILSAFE", "0").strip().lower() not in {"0", "false", "off", "no"}
 LIVENESS_FAILSAFE_COOLDOWN_SEC = max(60.0, float(os.getenv("DASH_LIVENESS_FAILSAFE_COOLDOWN_SEC", "900")))
 _liveness_custom = [
     part.strip().lower()
@@ -171,6 +171,31 @@ def _find_first_existing(candidates: list[Path | None]) -> Path | None:
     return None
 
 
+def _select_backup_dir(candidates: list[Path | None]) -> Path | None:
+    """Return the first directory that actually contains backup files, otherwise fall back to the first existing path."""
+    pattern = None
+    if CHAIN_BACKUP_PREFIX or CHAIN_BACKUP_SUFFIX:
+        prefix = CHAIN_BACKUP_PREFIX or ""
+        suffix = CHAIN_BACKUP_SUFFIX or ""
+        pattern = f"{prefix or ''}-*{suffix or ''}"
+    first_existing: Path | None = None
+    for candidate in candidates:
+        path = _normalize_path(candidate)
+        if not path or not path.exists():
+            continue
+        if first_existing is None:
+            first_existing = path
+        if not pattern:
+            return path
+        try:
+            match = next(path.glob(pattern), None)
+        except Exception:
+            match = None
+        if match is not None:
+            return path
+    return first_existing
+
+
 def _collect_home_dirs(primary_home: Path | None = None) -> list[Path]:
     homes: list[Path] = []
     seen: set[str] = set()
@@ -193,6 +218,22 @@ def _collect_home_dirs(primary_home: Path | None = None) -> list[Path]:
             for entry in homes_root.iterdir():
                 if entry.is_dir():
                     candidates.append(entry)
+    except Exception:
+        pass
+    media_root = Path("/media")
+    candidates.append(media_root)
+    try:
+        if media_root.exists():
+            for entry in media_root.iterdir():
+                if not entry.is_dir():
+                    continue
+                candidates.append(entry)
+                try:
+                    for sub in entry.iterdir():
+                        if sub.is_dir():
+                            candidates.append(sub)
+                except Exception:
+                    continue
     except Exception:
         pass
     for candidate in candidates:
@@ -327,8 +368,33 @@ def _auto_discover_chain_paths():
         _normalize_path(home / "backups"),
         _normalize_path(Path("/opt/blockdag-scripts/backups")),
     ])
+    media_root = Path("/media")
+    try:
+        if media_root.exists():
+            backup_candidates.append(_normalize_path(media_root / "backups"))
+            for entry in media_root.iterdir():
+                if not entry.is_dir():
+                    continue
+                backup_candidates.extend([
+                    _normalize_path(entry / "backups"),
+                    _normalize_path(entry / "blockdag" / "backups"),
+                    _normalize_path(entry / "blockdag-scripts" / "backups"),
+                ])
+                try:
+                    for sub in entry.iterdir():
+                        if not sub.is_dir():
+                            continue
+                        backup_candidates.extend([
+                            _normalize_path(sub / "backups"),
+                            _normalize_path(sub / "blockdag" / "backups"),
+                            _normalize_path(sub / "blockdag-scripts" / "backups"),
+                        ])
+                except Exception:
+                    continue
+    except Exception:
+        pass
 
-    discovered_backup = _find_first_existing(backup_candidates)
+    discovered_backup = _select_backup_dir(backup_candidates)
     if not discovered_backup:
         for candidate in backup_candidates:
             if not candidate:
@@ -3455,6 +3521,31 @@ def _scan_backup_locations(max_depth: int = 5) -> list[dict]:
         enqueue(home_dir / "blockdag-scripts", 1)
         enqueue(home_dir / "backups", 1)
         enqueue(home_dir / "blockdag-scripts" / "backups", 2)
+    media_root = Path("/media")
+    try:
+        if media_root.exists():
+            enqueue(media_root, 0)
+            for entry in media_root.iterdir():
+                if not entry.is_dir():
+                    continue
+                enqueue(entry, 0)
+                enqueue(entry / "blockdag", 1)
+                enqueue(entry / "blockdag-scripts", 1)
+                enqueue(entry / "backups", 1)
+                enqueue(entry / "blockdag-scripts" / "backups", 2)
+                try:
+                    for sub in entry.iterdir():
+                        if not sub.is_dir():
+                            continue
+                        enqueue(sub, 0)
+                        enqueue(sub / "blockdag", 1)
+                        enqueue(sub / "blockdag-scripts", 1)
+                        enqueue(sub / "backups", 1)
+                        enqueue(sub / "blockdag-scripts" / "backups", 2)
+                except Exception:
+                    continue
+    except Exception:
+        pass
 
     visited: set[str] = set()
     tokens = ("backup", "blockdag", "bdag", "node", "data", "scripts")
